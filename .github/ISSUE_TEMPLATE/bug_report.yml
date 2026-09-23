@@ -1,11 +1,27 @@
 name: Bug report
 description: Report a build, runtime, or rendering problem.
+labels: [bug]
 body:
   - type: markdown
     attributes:
       value: |
         Check the [current status](https://github.com/Sinan-Karakaya/DQ8-Recompiled/wiki/Project-Status) and existing issues first.
         Do not upload game files, generated game code, decryption keys, saves, or game-derived memory/graphics captures. Remove private paths and data from logs; see [CONTRIBUTE.md](https://github.com/Sinan-Karakaya/DQ8-Recompiled/blob/main/CONTRIBUTE.md).
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      description: Select the closest area, or leave this as Not sure.
+      default: 0
+      options:
+        - Not sure
+        - Graphics
+        - Vector units
+        - Runtime and compatibility
+        - Audio
+        - Build and CI
+        - Tools and extraction
+        - Documentation
   - type: textarea
     id: environment
     attributes:

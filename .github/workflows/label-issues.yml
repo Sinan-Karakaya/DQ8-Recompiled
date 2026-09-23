@@ -1,0 +1,45 @@
+name: Label issues
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+
+jobs:
+  label:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      # Classify the submitted form once; later maintainer labels stay untouched.
+      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const existing = new Set(issue.labels.map(label =>
+              typeof label === 'string' ? label : label.name));
+            const areas = new Map([
+              ['Graphics', 'area: graphics'],
+              ['Vector units', 'area: vu'],
+              ['Runtime and compatibility', 'area: runtime'],
+              ['Audio', 'area: audio'],
+              ['Build and CI', 'area: build'],
+              ['Tools and extraction', 'area: tooling'],
+              ['Documentation', 'area: documentation'],
+            ]);
+            const body = (issue.body || '').replace(/\r\n/g, '\n');
+            const sections = [...body.matchAll(/^### Area\n+([^\n]+)(?=\n|$)/gm)];
+            const area = sections.length === 1 ? areas.get(sections[0][1].trim()) : undefined;
+            const labels = area ? [area] : [];
+            if (!existing.has('bug') && !existing.has('enhancement')) {
+              labels.push('needs-triage');
+            }
+            const additions = labels.filter(label => !existing.has(label));
+            if (additions.length) {
+              await github.rest.issues.addLabels({
+                ...context.repo,
+                issue_number: issue.number,
+                labels: additions,
+              });
+            }

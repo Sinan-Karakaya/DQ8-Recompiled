@@ -1,0 +1,51 @@
+bug:
+  - head-branch: ['^(fix|bugfix|hotfix)[/-]']
+
+enhancement:
+  - head-branch: ['^(feat|feature)[/-]']
+
+'area: graphics':
+  - changed-files:
+      - any-glob-to-any-file: ['src/gfx/**', 'tools/gsdump/**']
+
+'area: vu':
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'src/runtime/vu_bounds.*'
+          - 'tools/runtime/vu*'
+          - 'tools/runtime/compare_vu_replays.py'
+
+'area: runtime':
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'src/runtime/**'
+          - 'tools/runtime/**'
+          - 'config/**'
+          - 'thirdparty/PS2Recomp'
+
+'area: tooling':
+  - changed-files:
+      - any-glob-to-any-file:
+          - 'setup.py'
+          - 'tools/hd6/**'
+          - 'tools/mvi/**'
+          - 'tools/mwo3/**'
+          - 'tools/ghidra/**'
+          - 'tools/oracle/**'
+          - 'tools/tests/**'
+          - 'tools/check_source_distribution.py'
+
+'area: build':
+  - changed-files:
+      - any-glob-to-any-file:
+          - '.github/**'
+          - '**/CMakeLists.txt'
+          - 'CMakePresets.json'
+          - 'cmake/**'
+          - '.gitignore'
+          - '.gitmodules'
+          - 'thirdparty/simde'
+
+'area: documentation':
+  - changed-files:
+      - any-glob-to-any-file: ['**/*.md', 'LICENSE', 'NOTICE']

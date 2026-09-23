@@ -19,11 +19,14 @@ Generic PS2 behavior belongs in the PS2Recomp submodule. DQ8-specific integratio
 belongs here. A submodule update must refer to a commit accessible in its
 configured remote; include the corresponding source changes in the review.
 
-CI runs one Linux x86-64 job for code changes on `main` and ready pull requests.
-It checks source distribution, tooling, VU code generation, the launcher stub,
-and CPU graphics tests. Documentation-only changes and draft PRs skip CI.
-For ARM64, select **CI → Run workflow → arm64** in GitHub Actions.
-Full game builds, SDL GPU validation, and gameplay checks remain local.
+CI runs automatically on pushes to `main` and pull requests, including drafts.
+It checks source distribution and tooling. In the public repository it also
+builds the recompiler, runtime, and SDL GPU renderer on Linux x86-64, Linux ARM64,
+and macOS ARM64, and runs authored runtime, VU differential, and graphics tests.
+GPU tests report skips when a device is unavailable. While the repository is
+private, only the lightweight Linux launcher and CPU graphics checks run alongside
+the tooling checks, to limit paid runner usage. Full game builds, captured replays,
+and live gameplay still require local game data.
 
 ## Code and tests
 
@@ -60,6 +63,11 @@ Include the commit, game version, OS, CPU/GPU, renderer, reproduction steps,
 expected behavior, and observed behavior. Trim logs to the relevant diagnostics
 and remove private paths or data. State whether a problem occurs with a clean
 configuration. For visual regressions, identify the scene and renderer settings.
+
+Issue forms add `bug` or `enhancement` and label the selected area; blank issues
+receive `needs-triage`. PRs receive area labels from changed paths. Branch names
+starting with `fix/`, `bugfix/`, or `hotfix/` add `bug`; `feat/` or `feature/`
+add `enhancement` (a hyphen also works). Maintainers can adjust labels afterward.
 
 User and developer documentation belongs in the
 [wiki](https://github.com/Sinan-Karakaya/DQ8-Recompiled/wiki). Document current

@@ -3,38 +3,22 @@ name: CI
 on:
   push:
     branches: [main]
-    paths-ignore:
-      - '**/*.md'
-      - LICENSE
-      - NOTICE
-      - '.github/ISSUE_TEMPLATE/**'
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-    paths-ignore:
-      - '**/*.md'
-      - LICENSE
-      - NOTICE
-      - '.github/ISSUE_TEMPLATE/**'
   workflow_dispatch:
-    inputs:
-      architecture:
-        description: Linux architecture
-        type: choice
-        default: x86_64
-        options: [x86_64, arm64]
+  public:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}-${{ inputs.architecture || 'x86_64' }}
+  group: ci-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   checks:
-    name: Linux ${{ inputs.architecture || 'x86_64' }}
-    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    runs-on: ${{ inputs.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    name: Source and tooling
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     env:
       CC: clang
@@ -55,6 +39,7 @@ jobs:
           python3 -m unittest discover -s thirdparty/PS2Recomp/tools/tests -p test_compile_vu_blocks.py -v
 
       - name: Build and run launcher stub
+        if: github.event.repository.private
         run: |
           cmake -S . -B build/ci -G Ninja -DCMAKE_BUILD_TYPE=Debug \
             -DDQ8_BUILD_PS2RECOMP=OFF -DDQ8_LINK_GENERATED=OFF \
@@ -63,6 +48,7 @@ jobs:
           ./build/ci/src/runtime/dq8
 
       - name: Build CPU graphics tests
+        if: github.event.repository.private
         run: |
           cmake -S tools/gsdump -B build/ci-gs -G Ninja \
             -DCMAKE_BUILD_TYPE=Debug -DDQ8_GFX_ENABLE_SDLGPU=OFF
@@ -70,4 +56,148 @@ jobs:
             --target dq8-gs-threaded-tests dq8-gs-transfer-tests
 
       - name: Run CPU graphics tests
+        if: github.event.repository.private
         run: ctest --test-dir build/ci-gs -R '^(gs-threaded|gs-transfer)$' --no-tests=error --timeout 60 --output-on-failure
+
+  build:
+    name: ${{ matrix.name }}
+    # Standard hosted runners are free for public repositories only.
+    if: github.event.repository.private == false
+    needs: checks
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86-64
+            os: ubuntu-24.04
+          - name: Linux ARM64
+            os: ubuntu-24.04-arm
+          - name: macOS ARM64
+            os: macos-15
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      CC: clang
+      CXX: clang++
+      PYTHONDONTWRITEBYTECODE: '1'
+      CMAKE_BUILD_PARALLEL_LEVEL: '2'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config libgl-dev \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libavcodec-dev libavformat-dev libavutil-dev libswresample-dev libswscale-dev \
+            libvulkan-dev mesa-vulkan-drivers glslang-tools libzstd-dev liblzma-dev
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+        run: brew install ninja pkg-config ffmpeg glslang spirv-cross zstd xz
+
+      - name: Check out SDL
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: libsdl-org/SDL
+          ref: fa2c02bb6e21974a89ea9824bc53c9932abe5f9c # release-3.4.16
+          path: build/SDL
+          persist-credentials: false
+
+      - name: Build SDL
+        run: |
+          cmake -S build/SDL -B build/sdl -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdl" \
+            -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF
+          cmake --build build/sdl
+          cmake --install build/sdl
+
+      - name: Build recompiler and runtime tests
+        run: |
+          profiles=$(python3 -c 'from pathlib import Path; print(";".join(str(p.resolve()) for p in sorted(Path("thirdparty/PS2Recomp/ps2xTest/data").glob("vu_*.vublocks"))))')
+          cmake -S . -B build/ci-runtime -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DDQ8_BUILD_PS2RECOMP=ON -DDQ8_LINK_GENERATED=OFF \
+            -DDQ8_GENERATED_DIR="$RUNNER_TEMP/no-game-corpus" -DDQ8_GFX_ENABLE_SDLGPU=OFF \
+            -DPS2X_BUILD_RECOMP=ON -DPS2X_BUILD_RUNTIME=ON -DPS2X_BUILD_ANALYZER=OFF \
+            -DPS2X_ENABLE_DEBUG_UI=OFF -DPS2X_ENABLE_FFMPEG=ON -DPS2X_ENABLE_SCCACHE=OFF \
+            -DGLFW_BUILD_WAYLAND=OFF -DPS2X_VU_AOT_IMAGES="$profiles" \
+            -DPS2X_VU_AOT_SHARDS=8 -DPS2X_VU_AOT_COMPILE_JOBS=2
+          cmake --build build/ci-runtime --target ps2_recomp dq8 dq8-fiber-native \
+            dq8-kernel-tests dq8-ee-pacing-tests dq8-vu-tests dq8-vu-math-tests \
+            dq8-vu-bounds-tests dq8-memory-tests dq8-render-cadence-tests
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            cmake --build build/ci-runtime --target dq8-fiber-ucontext
+          fi
+
+      - name: Run runtime tests
+        env:
+          PS2_VU_PROFILE_REGIONS: '1'
+          PS2_VU_PROFILE_COUNTED_LOOPS: '1'
+          PS2_VU_REQUIRE_REGIONS: '1'
+          PS2_VU_REQUIRE_COUNTED_LOOPS: '1'
+          PS2_VU_REQUIRE_NATURAL_LOOPS: '1'
+          PS2_VU_REQUIRE_BRANCH_TAILS: '1'
+          PS2_VU_REQUIRE_DIV_LOOPS: '1'
+        run: |
+          ./build/ci-runtime/src/runtime/dq8
+          ctest --test-dir build/ci-runtime/tools/runtime --no-tests=error \
+            --timeout 60 --output-on-failure
+
+      - name: Build SDL GPU renderer and graphics tests
+        run: |
+          cmake -S tools/gsdump -B build/ci-gpu -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/sdl" \
+            -DDQ8_GFX_ENABLE_SDLGPU=ON
+          cmake --build build/ci-gpu --target dq8-gsreplay dq8-gs-trace-replay \
+            dq8-gs-threaded-tests dq8-gs-transfer-tests dq8-sdlgpu-input-tests \
+            dq8-sdlgpu-raster-tests dq8-movie-upload-tests
+
+      - name: Run graphics tests
+        run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            export SDL_GPU_DRIVER=vulkan
+            export VK_ICD_FILENAMES
+            VK_ICD_FILENAMES=$(find /usr/share/vulkan/icd.d -name 'lvp_icd*.json' -print -quit)
+            test -n "$VK_ICD_FILENAMES"
+          else
+            export SDL_GPU_DRIVER=metal
+          fi
+          ctest --test-dir build/ci-gpu --no-tests=error --timeout 60 \
+            --output-on-failure --output-junit graphics.xml
+
+      - name: Report GPU test availability
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          report = Path('build/ci-gpu/graphics.xml')
+          lines = ['Graphics tests did not produce a report.']
+          if report.exists():
+              cases = {t.attrib['name']: t for t in ET.parse(report).iter('testcase')}
+              lines = []
+              for name in ('sdlgpu-input', 'sdlgpu-raster', 'movie-upload'):
+                  case = cases.get(name)
+                  if case is None:
+                      status = 'not run'
+                  elif case.find('skipped') is not None:
+                      status = 'skipped (device unavailable)'
+                      print(f'::warning::{name} skipped; this does not validate rendering.')
+                  elif case.find('failure') is not None or case.find('error') is not None:
+                      status = 'failed'
+                  else:
+                      status = 'passed'
+                  lines.append(f'- {name}: {status}')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('\n'.join(lines) + '\n')
+          PY
