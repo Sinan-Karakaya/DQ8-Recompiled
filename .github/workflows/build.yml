@@ -60,7 +60,7 @@ jobs:
         run: ctest --test-dir build/ci-gs -R '^(gs-threaded|gs-transfer)$' --no-tests=error --timeout 60 --output-on-failure
 
   build:
-    name: ${{ matrix.name }}
+    name: Runtime / ${{ matrix.name }}
     # Standard hosted runners are free for public repositories only.
     if: github.event.repository.private == false
     needs: checks
@@ -102,33 +102,14 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build pkg-config libgl-dev \
             libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
-            libxss-dev libxtst-dev libxkbcommon-dev libwayland-dev wayland-protocols \
-            libdecor-0-dev libegl1-mesa-dev libgbm-dev libdrm-dev libudev-dev \
-            libasound2-dev libpulse-dev \
-            libavcodec-dev libavformat-dev libavutil-dev libswresample-dev libswscale-dev \
-            libvulkan-dev mesa-vulkan-drivers glslang-tools libzstd-dev liblzma-dev
+            libasound2-dev libavcodec-dev libavformat-dev libavutil-dev \
+            libswresample-dev libswscale-dev
 
       - name: Install macOS dependencies
         if: runner.os == 'macOS'
         env:
           HOMEBREW_NO_AUTO_UPDATE: '1'
-        run: brew install ninja pkg-config ffmpeg glslang spirv-cross zstd xz
-
-      - name: Check out SDL
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          repository: libsdl-org/SDL
-          ref: fa2c02bb6e21974a89ea9824bc53c9932abe5f9c # release-3.4.16
-          path: build/SDL
-          persist-credentials: false
-
-      - name: Build SDL
-        run: |
-          cmake -S build/SDL -B build/sdl -G Ninja \
-            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdl" \
-            -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF
-          cmake --build build/sdl
-          cmake --install build/sdl
+        run: brew install ninja pkg-config ffmpeg
 
       - name: Build recompiler and runtime tests
         run: |
@@ -171,6 +152,69 @@ jobs:
           ./build/ci-runtime/src/runtime/dq8
           ctest --test-dir build/ci-runtime/tools/runtime --no-tests=error \
             --timeout 60 --output-on-failure
+
+  graphics:
+    name: Graphics / ${{ matrix.name }}
+    if: github.event.repository.private == false
+    needs: checks
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86-64
+            os: ubuntu-24.04
+          - name: Linux ARM64
+            os: ubuntu-24.04-arm
+          - name: macOS ARM64
+            os: macos-15
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    env:
+      CC: clang
+      CXX: clang++
+      PYTHONDONTWRITEBYTECODE: '1'
+      CMAKE_BUILD_PARALLEL_LEVEL: '2'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build pkg-config libgl-dev \
+            libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libxss-dev libxtst-dev libxkbcommon-dev libwayland-dev wayland-protocols \
+            libdecor-0-dev libegl1-mesa-dev libgbm-dev libdrm-dev libudev-dev \
+            libasound2-dev libpulse-dev libvulkan-dev mesa-vulkan-drivers \
+            glslang-tools libzstd-dev liblzma-dev
+
+      - name: Install macOS dependencies
+        if: runner.os == 'macOS'
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: '1'
+        run: brew install ninja pkg-config glslang spirv-cross zstd xz
+
+      - name: Check out SDL
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: libsdl-org/SDL
+          ref: fa2c02bb6e21974a89ea9824bc53c9932abe5f9c # release-3.4.16
+          path: build/SDL
+          persist-credentials: false
+
+      - name: Build SDL
+        run: |
+          cmake -S build/SDL -B build/sdl -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX="$RUNNER_TEMP/sdl" \
+            -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF
+          cmake --build build/sdl
+          cmake --install build/sdl
 
       - name: Build SDL GPU renderer and graphics tests
         run: |
