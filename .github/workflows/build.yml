@@ -70,10 +70,16 @@ jobs:
         include:
           - name: Linux x86-64
             os: ubuntu-24.04
+            aot-shards: 32
+            aot-jobs: 1
           - name: Linux ARM64
             os: ubuntu-24.04-arm
+            aot-shards: 32
+            aot-jobs: 1
           - name: macOS ARM64
             os: macos-15
+            aot-shards: 8
+            aot-jobs: 2
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     defaults:
@@ -126,6 +132,16 @@ jobs:
 
       - name: Build recompiler and runtime tests
         run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            (
+              while sleep 30; do
+                free -m
+                ps -eo comm,rss --sort=-rss | awk 'NR <= 6'
+              done
+            ) &
+            monitor_pid=$!
+            trap 'kill "$monitor_pid" 2>/dev/null || true' EXIT
+          fi
           profiles=$(python3 -c 'from pathlib import Path; print(";".join(str(p.resolve()) for p in sorted(Path("thirdparty/PS2Recomp/ps2xTest/data").glob("vu_*.vublocks"))))')
           cmake -S . -B build/ci-runtime -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DDQ8_BUILD_PS2RECOMP=ON -DDQ8_LINK_GENERATED=OFF \
@@ -133,7 +149,8 @@ jobs:
             -DPS2X_BUILD_RECOMP=ON -DPS2X_BUILD_RUNTIME=ON -DPS2X_BUILD_ANALYZER=OFF \
             -DPS2X_ENABLE_DEBUG_UI=OFF -DPS2X_ENABLE_FFMPEG=ON -DPS2X_ENABLE_SCCACHE=OFF \
             -DGLFW_BUILD_WAYLAND=OFF -DPS2X_VU_AOT_IMAGES="$profiles" \
-            -DPS2X_VU_AOT_SHARDS=8 -DPS2X_VU_AOT_COMPILE_JOBS=2
+            -DPS2X_VU_AOT_SHARDS=${{ matrix.aot-shards }} \
+            -DPS2X_VU_AOT_COMPILE_JOBS=${{ matrix.aot-jobs }}
           cmake --build build/ci-runtime --target ps2_recomp dq8 dq8-fiber-native \
             dq8-kernel-tests dq8-ee-pacing-tests dq8-vu-tests dq8-vu-math-tests \
             dq8-vu-bounds-tests dq8-memory-tests dq8-render-cadence-tests
