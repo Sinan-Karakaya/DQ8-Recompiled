@@ -1,0 +1,110 @@
+# Metrowerks MWo3 overlay table — Dragon Quest 8 PAL (SLES_539.74).
+#
+# Decoded from the 0x40-byte MWo3 header at the start of each BIN/*.BIN on
+# disc, cross-checked against the six zero-filesz PT_LOAD segments in the
+# main ELF (each segment's memsz == 0x40 header + text + data + bss, exact).
+# Full format spec: https://github.com/Sinan-Karakaya/DQ8-Recompiled/wiki/File-Formats
+#
+# MWo3 0x40 header layout (all fields little-endian u32 unless noted):
+#   0x00  char[4]  magic       "MWo3"
+#   0x04  u32      id          overlay id (see table below)
+#   0x08  u32      load_addr   destination address of the whole file image
+#                              (header included) — 0x0045EC80 for every DQ8
+#                              overlay; .text therefore begins at
+#                              load_addr + 0x40 = 0x0045ECC0
+#   0x0C  u32      text_size   bytes of .text following the header in file
+#   0x10  u32      data_size   bytes of .data following .text in file
+#   0x14  u32      bss_size    bytes of .bss zero-filled after .data in RAM
+#                              (not present in the file)
+#   0x18  u32      ctor_begin  VA of static-constructor pointer array start
+#   0x1C  u32      ctor_end    VA one past the array end (the loader calls
+#                              each function pointer in [ctor_begin,ctor_end))
+#   0x20  char[32] name        NUL-padded ASCII overlay name
+#
+# File layout: [0x40 header][.text][.data]; file size == 0x40 + text + data.
+# RAM layout after load: header at 0x0045EC80, then text/data/bss contiguous.
+#
+# Overlay arena: 0x0045EC80 .. 0x00486C80 (160 KiB). The arena end equals
+# load_addr + the largest overlay memsz (battle: 0x40+0x23CC0+0x2680+0x1C80
+# = 0x28000). Exactly one overlay is resident at a time; the game loads them
+# from cdrom0:\BIN\<NAME>.BIN;1.
+
+version = "SLES_539.74"
+arena_start = 0x0045EC80
+arena_end = 0x00486C80
+
+[[overlay]]
+file = "BIN/CASINO.BIN"
+id = 1
+load_addr = 0x0045EC80
+text_addr = 0x0045ECC0
+text_size = 0x0001BAC0
+data_size = 0x00004C80
+bss_size = 0x00001380
+ctor_begin = 0x0047F3C0
+ctor_end = 0x0047F3D4
+name = "casino.bin"
+
+# id = 2 is VIEWER.BIN — stripped from PAL retail. The loader path is still
+# intact in the executable (`cdrom0:\BIN\VIEWER.BIN;1`) and the main ELF
+# reserves a PT_LOAD for it (memsz 0x500 => text+data+bss = 0x4C0 total,
+# split unknown). Check the US/JP discs for the actual file.
+# [[overlay]]
+# file = "BIN/VIEWER.BIN"
+# id = 2
+# load_addr = 0x0045EC80
+# text_addr = 0x0045ECC0
+# text_size = 0x0        # unknown — file stripped from PAL retail
+# data_size = 0x0        # unknown
+# bss_size = 0x0         # unknown
+# ctor_begin = 0x0
+# ctor_end = 0x0
+# name = "viewer.bin"
+
+[[overlay]]
+file = "BIN/SHOP.BIN"
+id = 3
+load_addr = 0x0045EC80
+text_addr = 0x0045ECC0
+text_size = 0x0000F1C0
+data_size = 0x00006080
+bss_size = 0x00002C80
+ctor_begin = 0x00473EA0
+ctor_end = 0x00473EAC
+name = "shop.bin"
+
+[[overlay]]
+file = "BIN/MENU.BIN"
+id = 4
+load_addr = 0x0045EC80
+text_addr = 0x0045ECC0
+text_size = 0x00019AC0
+data_size = 0x00001500
+bss_size = 0x00002380
+ctor_begin = 0x00479C20
+ctor_end = 0x00479C30
+name = "menu.bin"
+
+[[overlay]]
+file = "BIN/BATTLE.BIN"
+id = 5
+load_addr = 0x0045EC80
+text_addr = 0x0045ECC0
+text_size = 0x00023CC0
+data_size = 0x00002680
+bss_size = 0x00001C80
+ctor_begin = 0x00484F80
+ctor_end = 0x00484F94
+name = "battle.bin"
+
+[[overlay]]
+file = "BIN/TITLE.BIN"
+id = 6
+load_addr = 0x0045EC80
+text_addr = 0x0045ECC0
+text_size = 0x00004D40
+data_size = 0x00000700
+bss_size = 0x00000600
+ctor_begin = 0x004640A0
+ctor_end = 0x004640B8
+name = "title.bin"

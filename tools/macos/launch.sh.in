@@ -1,0 +1,9 @@
+#!/bin/sh
+# Local workspace launcher; the user's disc stays outside the app bundle.
+set -eu
+cd "@CMAKE_SOURCE_DIR@"
+mkdir -p "@CMAKE_BINARY_DIR@/logs"
+export DQ8_GFX_STATS_EVERY="${DQ8_GFX_STATS_EVERY:-120}"
+exec "@DQ8_MACOS_BINARY@" "@DQ8_MACOS_ELF@" \
+    "--iso=@DQ8_MACOS_ISO@" --gs=sdlgpu "$@" \
+    >> "@CMAKE_BINARY_DIR@/logs/dq8.log" 2>&1

@@ -1,0 +1,13 @@
+# Hand-identified functions, applied by tools/oracle/apply_analyzer_names.py
+# --names after the ps2_analyzer pass. Everything here is a naming decision a
+# human made from disassembly, kept out of functions.csv so that file stays
+# "Ghidra export plus mechanical repair" with no judgement mixed in.
+#
+# Rule for adding a row: the identification must be checkable from the
+# disassembly alone, and the reasoning goes in the Why column. Names must match
+# what the runtime spells in PS2_STUB_LIST if the function is to be stubbed --
+# ps2_recomp resolves ps2_stubs::<name> from the name, not the address.
+Name,Start,Why
+sceSifLoadModule,0x0011FA20,"Public wrapper over _sceSifLoadModule (0x0011F7F8). Sets $t0=0 (dontwait) and $a3=$sp (scratch for the module-result out-param) then tail-calls it, which is exactly sceSifLoadModule(path,args,argp) over _sceSifLoadModule(path,args,argp,mod_res,dontwait). ps2_analyzer only matched the underscore implementation, whose ABI differs, so the wrapper stayed FUN_0011fa20 and the guest RPC path ran natively and span."
+sceCdSearchFile,0x0012A970,"Public wrapper over sceCdLayerSearchFile (0x0012A670). Seven instructions: sets $a2=0 (layer) in the delay slot and tail-calls it, which is exactly sceCdSearchFile(fp,name) over sceCdLayerSearchFile(fp,name,layer). Safe because layer is hardcoded 0 here and DQ8_USA.iso is 3.89 GiB, under the 4.37 GiB DVD-5 single-layer limit, so there is no layer 1. Unstubbed it ran as guest code, posting an async CD command and waiting on a semaphore no IOP will ever signal -- 8 of 12 stack samples sat here. Same wrapper-vs-implementation trap as sceSifLoadModule."
+memalign,0x00131890,"Public wrapper over _memalign_r (0x001318F8): takes the reent pointer from _impure_ptr at 0x003945D8, brackets the call with __malloc_lock/__malloc_unlock, and passes a0=alignment a1=size straight through, which is the standard memalign(alignment,size). ps2_analyzer only matched the underscore implementation, so the wrapper stayed FUN_00131890 and ran as guest code -- reaching malloc_extend_top, which the runtime stubs to always fail. That is the boot error 'buff malloc error!!!!': the game reserving its 26 MiB pool. The runtime spells it memalign(a0=alignment,a1=size) -> guestMalloc(size,alignment), an exact ABI match, and shares guestFree with the already-stubbed free."

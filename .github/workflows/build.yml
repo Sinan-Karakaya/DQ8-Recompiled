@@ -1,0 +1,59 @@
+# Public CI uses authored source and fixtures only; the game corpus stays local.
+
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  source-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check distributed files and setup tools
+        run: |
+          python3 tools/check_source_distribution.py
+          python3 -m unittest discover -s tools/tests -v
+          python3 -m unittest discover -s tools/mvi -p 'test_*.py' -v
+
+  build-linux:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            preset: linux-x86_64-debug
+            arch: x86-64
+          - runner: ubuntu-24.04-arm
+            preset: linux-arm64-debug
+            arch: arm64
+    name: linux-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld ninja-build cmake
+
+      - name: Tool versions
+        run: |
+          clang --version
+          cmake --version
+          ninja --version
+
+      - name: Configure
+        run: cmake --preset ${{ matrix.preset }}
+
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+
+      - name: Run stub
+        run: ./build/${{ matrix.preset }}/src/runtime/dq8

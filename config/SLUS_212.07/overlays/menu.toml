@@ -1,0 +1,17 @@
+# ps2xRecomp configuration for Dragon Quest 8 NTSC-U (SLUS_212.07)
+# MWo3 overlay: BIN/MENU.BIN (MWo3 id 4, loader slot 4).
+# Local paths are resolved by setup.py recompile.
+[general]
+input = "build/overlays/menu.elf"
+ghidra_output = "config/SLUS_212.07/functions_menu.csv"
+output = "build/generated/SLUS_212.07-overlays/menu"
+single_file_output = false
+low_memory_mode = false
+output_worker_threads = 0
+patch_syscalls = false
+patch_cop0 = true
+patch_cache = true
+
+# SDK calls leave the overlay arena and use the resident executable bindings.
+stubs = []
+skip = []

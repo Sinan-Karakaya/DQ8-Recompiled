@@ -1,0 +1,52 @@
+# Build output and locally generated game code
+build/
+build-*/
+out/
+
+# Local disc images, executables, assets and captures
+*.iso
+*.ISO
+*.elf
+*.ELF
+SLUS_*
+SLES_*
+!config/SLUS_*/
+!config/SLES_*/
+*.DAT
+*.HD6
+*.MVI
+*.PSS
+*.pss
+*.gs
+*.gs.zst
+*.gs.xz
+*.trace
+*.state
+*.code
+*.data
+*.vublocks
+*.vuimages
+*_xor_key.bin
+Assets/
+Assets_*/
+Extracted_*/
+assets-extracted/
+mc0/
+mc1/
+
+# Ghidra projects
+*.gpr
+*.rep/
+
+# Editor / OS noise
+.cache/
+.vscode/
+.idea/
+compile_commands.json
+__pycache__/
+*.pyc
+.DS_Store
+CMakeFiles/
+CMakeCache.txt
+.env
+.env.*

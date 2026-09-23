@@ -1,0 +1,6 @@
+[submodule "thirdparty/PS2Recomp"]
+	path = thirdparty/PS2Recomp
+	url = https://github.com/Sinan-Karakaya/PS2Recomp.git
+[submodule "thirdparty/simde"]
+	path = thirdparty/simde
+	url = https://github.com/simd-everywhere/simde.git

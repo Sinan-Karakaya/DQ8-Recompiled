@@ -1,0 +1,214 @@
+# DQ8Recomp symbol database — symbolic name -> per-version address indirection.
+# Reverse-engineering metadata: addresses, identified names, and source basenames
+# recovered from retail assert/debug strings. This contains no game or SDK
+# source code or executable instruction data.
+#
+# Purpose: all runtime/patch/hook code refers to game locations by NAME; this
+# file maps each name to a concrete address per game version, so the same
+# source supports SLES_539.74 (PAL, recon) and SLUS_212.07 (NTSC-U, target)
+# without edits. Workstream 2 (Ghidra) is the main producer of entries.
+#
+# Schema — one [[symbol]] table per entry:
+#   name           unique symbolic name (C-identifier style; :: allowed for
+#                  original C++ names recovered from strings)
+#   kind           one of:
+#                    function     code entry point
+#                    data         data object
+#                    region       address range; addr is the start, and a
+#                                 sibling entry "<name>_end" or an inline
+#                                 `size` field bounds it
+#                    source_file  original source basename recovered from
+#                                 assert/debug strings (no address; anchors
+#                                 for naming functions during RE)
+#                    class        original class/method name recovered from
+#                                 strings (address = vtable or method start
+#                                 once known)
+#   "SLES_539.74"  address in the PAL ELF as a "0x"-prefixed hex string,
+#                  or "" when not yet located in that version
+#   "SLUS_212.07"  same for the NTSC-U ELF ("" until the US dump is mapped)
+#   note           free-form context (optional)
+#
+# Conventions:
+# - Addresses are virtual addresses as seen by the game (untranslated).
+# - Overlay-resident symbols also carry `overlay = "<name>"` (e.g. "battle.bin");
+#   their addresses are only valid while that overlay is resident in the arena.
+# - Never delete an entry that shipped in a release; rename via `note`.
+
+# --------------------------------------------------------------------------
+# Verified anchors (workstream 6 seed, 2026-08-17; derived from the PAL ELF
+# header, PT_LOAD table, MWo3 overlay headers, and embedded strings)
+# --------------------------------------------------------------------------
+
+[[symbol]]
+name = "_start"
+kind = "function"
+"SLES_539.74" = "0x00100008"
+"SLUS_212.07" = ""
+note = "ELF entry point (e_entry)"
+
+[[symbol]]
+name = "main_load_base"
+kind = "region"
+"SLES_539.74" = "0x00100000"
+"SLUS_212.07" = ""
+size = 0x35EC80
+note = "first PT_LOAD of the main ELF (filesz 0x2E0280, memsz 0x35EC80)"
+
+[[symbol]]
+name = "overlay_arena"
+kind = "region"
+"SLES_539.74" = "0x0045EC80"
+"SLUS_212.07" = ""
+size = 0x28000
+note = "MWo3 overlay arena start; one overlay resident at a time; size = largest overlay memsz (battle.bin)"
+
+[[symbol]]
+name = "overlay_arena_end"
+kind = "region"
+"SLES_539.74" = "0x00486C80"
+"SLUS_212.07" = ""
+note = "one past the overlay arena (start of the empty trailing PT_LOAD)"
+
+[[symbol]]
+name = "overlay_text_base"
+kind = "region"
+"SLES_539.74" = "0x0045ECC0"
+"SLUS_212.07" = ""
+note = "overlay .text start = arena + 0x40 MWo3 header; identical for every overlay"
+
+# ---- Source basenames recovered from assert/debug strings in the main ELF
+#      (the '12 source basenames'; naming convention dq_* / btl_* / mg_*) ----
+
+[[symbol]]
+name = "src_btl_actana_cpp"
+kind = "source_file"
+"SLES_539.74" = ""
+"SLUS_212.07" = ""
+note = "btl_actana.cpp"
+
+[[symbol]]
+name = "src_btl_chrinfo_logic_cpp"
+kind = "source_file"
+"SLES_539.74" = ""
+"SLUS_212.07" = ""
+note = "btl_chrinfo_logic.cpp"
+
+[[symbol]]
+name = "src_btl_playdata_cpp"
+kind = "source_file"
+"SLES_539.74" = ""
+"SLUS_212.07" = ""
+note = "btl_playdata.cpp"
+
+[[symbol]]
+name = "src_btl_viscom_cpp"
+kind = "source_file"
+"SLES_539.74" = ""
+"SLUS_212.07" = ""
+note = "btl_viscom.cpp"
+
+[[symbol]]
+name = "src_dq_2nd_chk_cpp"
+kind = "source_file"
+"SLES_539.74" = ""
+"SLUS_212.07" = ""
+note = "dq_2nd_chk.cpp"
+
+[[symbol]]
+name = "src_dq_monster_ai_cpp"
+kind = "source_file"
+"SLES_539.74" = ""
+"SLUS_212.07" = ""
+note = "dq_monster_ai.cpp"
+
+[[symbol]]
+name = "src_dq_player_ai_cpp"
+kind = "source_file"
+"SLES_539.74" = ""
+"SLUS_212.07" = ""
+note = "dq_player_ai.cpp"
+
+[[symbol]]
+name = "src_mg_draw_cpp"
+kind = "source_file"
+"SLES_539.74" = ""
+"SLUS_212.07" = ""
+note = "mg_draw.cpp"
+
+[[symbol]]
+name = "src_playerai_data_cpp"
+kind = "source_file"
+"SLES_539.74" = ""
+"SLUS_212.07" = ""
+note = "playerai_data.cpp"
+
+[[symbol]]
+name = "src_dq_monster_ai_h"
+kind = "source_file"
+"SLES_539.74" = ""
+"SLUS_212.07" = ""
+note = "dq_monster_ai.h"
+
+[[symbol]]
+name = "src_eff_hdl_h"
+kind = "source_file"
+"SLES_539.74" = ""
+"SLUS_212.07" = ""
+note = "eff_hdl.h"
+
+[[symbol]]
+name = "src_playerai_data_h"
+kind = "source_file"
+"SLES_539.74" = ""
+"SLUS_212.07" = ""
+note = "playerai_data.h"
+
+# ---- Class/method names recovered verbatim from log/assert strings in the
+#      main ELF (addresses to be filled by workstream 2 via string xref) ----
+
+[[symbol]]
+name = "BTL_CHARA_INFO::SetNowBaseMotType"
+kind = "class"
+"SLES_539.74" = ""
+"SLUS_212.07" = ""
+
+[[symbol]]
+name = "CBtlPCParts::Create"
+kind = "class"
+"SLES_539.74" = ""
+"SLUS_212.07" = ""
+
+[[symbol]]
+name = "CBuildMonster::GetChara"
+kind = "class"
+"SLES_539.74" = ""
+"SLUS_212.07" = ""
+
+[[symbol]]
+name = "CBuildMonster::Regist"
+kind = "class"
+"SLES_539.74" = ""
+"SLUS_212.07" = ""
+
+[[symbol]]
+name = "CPutMonster::Dead"
+kind = "class"
+"SLES_539.74" = ""
+"SLUS_212.07" = ""
+
+[[symbol]]
+name = "CPutMonster::Insert"
+kind = "class"
+"SLES_539.74" = ""
+"SLUS_212.07" = ""
+
+[[symbol]]
+name = "CPutMonster::Revive"
+kind = "class"
+"SLES_539.74" = ""
+"SLUS_212.07" = ""
+
+# ---- Pending: the two stubbed debug printfs (file-load logger,
+# thread/sema logger) — US/JP addresses documented on TCRF, PAL addresses
+# derivable by string xref. Add as kind = "function" entries named
+# "debug_printf_fileload" / "debug_printf_kernel" when located. ----

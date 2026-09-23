@@ -1,0 +1,35 @@
+DQ8Recomp
+=========
+
+Project source is licensed under GNU GPL version 3; see LICENSE. This license
+does not cover the original game, disc contents, BIOS, or other third-party
+material used locally to build and test the project.
+
+DQ8Recomp is independent of Square Enix, Level-5, and Sony. Product names and
+trademarks remain the property of their respective owners. No affiliation or
+endorsement is implied.
+
+Dependencies
+------------
+
+PS2Recomp: https://github.com/ran-j/PS2Recomp (GNU GPL v3)
+  Local integration fork: https://github.com/Sinan-Karakaya/PS2Recomp
+  License: thirdparty/PS2Recomp/LICENSE
+SIMDe: https://github.com/simd-everywhere/simde (MIT)
+  License: thirdparty/simde/COPYING
+
+PCSX2 (https://github.com/PCSX2/pcsx2) is a reference for GS dump compatibility
+and renderer validation. Its source is licensed under GPL-3.0-or-later; retain
+its notices when importing code. Local reference captures are not distributed.
+
+Builds also use dependencies selected by CMake and the host package manager,
+including SDL3, raylib, sse2neon, FFmpeg, glslang, SPIRV-Cross, ELFIO, toml11,
+fmt, libdwarf, and Rabbitizer. Their copyright notices and license files remain
+with their source distributions. The wiki's Licensing page documents their
+roles and license locations:
+https://github.com/Sinan-Karakaya/DQ8-Recompiled/wiki/Licensing
+
+When distributing project tools, retain the applicable notices and comply with
+the licenses of the exact dependency versions and build options used. A local
+game-linked executable includes generated game code and is not a project-only
+tool release.

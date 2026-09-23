@@ -1,0 +1,63 @@
+{
+  "version": "SLUS_212.07",
+  "title": "Dragon Quest VIII: Journey of the Cursed King",
+  "region": "NTSC-U",
+  "generated": "2026-08-17",
+  "comment": "Known-good hashes for the supported NTSC-U dump. 'iso.name' is informational only (dump filenames vary); sizes and sha256 are authoritative. 'files' keys are paths relative to the extracted ISO root. 'elf' names the boot executable entry inside 'files'.",
+  "iso": {
+    "name": "DQ8_USA.iso",
+    "sha256": "a38f71b7a02f1ae0fe65cc78137ee9c943b75b44473ae1cd5ed89ef0e61400e9",
+    "size": 4180148224
+  },
+  "elf": "SLUS_212.07",
+  "files": {
+    "SLUS_212.07": {
+      "sha256": "56ac18170704111c9cbf2f3a8a71ee5b708f39706649671ca1b1314451ef9c28",
+      "size": 2960032
+    },
+    "SYSTEM.CNF": {
+      "sha256": "d8164b4efe758a4b4eb14ad0760142feeb1ecd4b0c6f8c589b3e7ef67d335639",
+      "size": 57
+    },
+    "BIN/BATTLE.BIN": {
+      "sha256": "c3d3a9b8955145350ff67229185b2b4f0bc950ef873d2deae4536274cee9ead0",
+      "size": 156032
+    },
+    "BIN/CASINO.BIN": {
+      "sha256": "f5586241cb0e2ba9d0b55c78e8e76aef20fe20fcaa27fd614bf9a48acad9f003",
+      "size": 129920
+    },
+    "BIN/MENU.BIN": {
+      "sha256": "95d42b7a074c23f9475eba1580f7b3328a4836db70d66c3de7a5308bf54ad50f",
+      "size": 109312
+    },
+    "BIN/SHOP.BIN": {
+      "sha256": "fb936a7ea5d949e63a4d0ec52e89800cba99b089b6af6ad95b20c84c9c65d108",
+      "size": 86016
+    },
+    "BIN/TITLE.BIN": {
+      "sha256": "c3736b85493ad8a17b8f0873c7a4bf8cf9cf16a7e0f0879dd99c8fd5e0b1f311",
+      "size": 20864
+    },
+    "BIN/VIEWER.BIN": {
+      "sha256": "79d88e50c0c943f7241a674614496913cb42c6bcc25afb4da431530983bd42f3",
+      "size": 1152
+    },
+    "DATA.HD6": {
+      "sha256": "25149ebc4f67b6618e5f0c9cf4f5f1c89926abbe59d4fa6864b6e816301ae037",
+      "size": 188732
+    },
+    "DATA2.HD6": {
+      "sha256": "0375d982e84bff9e62d2fd7bc9e38c503ed540a6265527e9fdb5ee676a663bb7",
+      "size": 87092
+    },
+    "DATA.DAT": {
+      "sha256": "357d632844dad4e1af9ed10a92aa6b4a37345cac3964b3d7a478101d08c949ed",
+      "size": 1804218368
+    },
+    "DATA2.DAT": {
+      "sha256": "838feccdf9c9fd147262469ec95a7a5b3f54ef81d0c23cdfa2caa7a3907bfad0",
+      "size": 752971776
+    }
+  }
+}

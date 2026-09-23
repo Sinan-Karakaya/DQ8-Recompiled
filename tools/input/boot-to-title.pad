@@ -1,0 +1,24 @@
+# Input script for DQ8, replayed against the guest's own frame clock.
+#
+#   DQ8_PAD_SCRIPT=tools/input/boot-to-title.pad \
+#   ./build/dq8-o2/src/runtime/dq8 ../Extracted_Usa/SLUS_212.07 \
+#       --iso=../DQ8_USA.iso --gs=sdlgpu
+#
+# Columns: <guest-frame> <BUTTON>[+<BUTTON>...] [hold-frames]
+#
+# The clock is guest vsync ticks, not host frames or seconds, so the script
+# replays the same way whether the runtime is managing 3 fps or 60. Frame
+# numbers come straight from DQ8_GFX_SCREENSHOT_DIR output, which names each
+# capture after the tick it was taken on.
+#
+# Comments start with '#'. Entries may also be separated by ';' on one line, so
+# the whole thing fits in an env var when a file is inconvenient.
+
+# System settings. These come up on any card with no saved config -- which is
+# every fresh mc0 -- and wait indefinitely. The "No memory card ... Begin game
+# anyway?" prompt that used to precede them is gone: the runtime presents a
+# formatted card, so DQ8 never asks.
+600   CROSS  6    # Screen Size -> Normal 4:3 (UP first would pick 16:9)
+900   CROSS  6    # Sound -- accept the defaults
+# No movie-time input: later CROSS presses can end playback early on the
+# current runtime. Keep all 270 logo frames and 750 TAKA_N frames for timing.

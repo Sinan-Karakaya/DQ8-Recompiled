@@ -1,0 +1,89 @@
+gametitle=Dragon Quest VIII: Journey of the Cursed King (NTSC-U) SLUS-21207 F4715852
+
+// ---------------------------------------------------------------------------
+// Golden-trace oracle patch. Restores two compile-time-stubbed debug log
+// call sites so retail TTY-logs file loads (name/offset/size), VRAM/texture
+// allocations, IOP allocations, and thread/semaphore create/delete. Enable
+// PCSX2's "Show Console" (System > Console) to see the output. Full write-up,
+// including how the golden trace this feeds is captured and compared, is in
+// https://github.com/Sinan-Karakaya/DQ8-Recompiled/wiki/Testing.
+//
+// Provenance -- addresses and encodings cross-checked two independent ways:
+//   (a) TCRF's published US Action Replay/CodeBreaker "raw" codes for this
+//       game (Debug Logging section, DQ8 TCRF page).
+//   (b) Static analysis of our own SLUS_212.07 dump (Ghidra r5900
+//       disassembly + decompiler): FUN_00146e20 and FUN_00321620 both
+//       decompile, as shipped, to a bare `void f(void) { return; }` -- the
+//       compiler dead-code-eliminated a trailing tail-call to a shared
+//       log/format routine at 0x00119508.
+// Both routes agree exactly on all three addresses and the patch words.
+//
+// (c) Re-verified 2026-08-17 against the *recompiled corpus* itself
+//     (build/generated/SLUS_212.07/), which is a cleaner oracle than the
+//     decompiler because every branch is a literal, greppable target:
+//       - FUN_00146e20 is 0x27bdffc0 / sd a0..t3 / jr ra  -- the canonical
+//         Metrowerks varargs prologue with the body gone. FUN_00321620 is
+//         the same shape (0x27bdffb0, spills a1..t3, a0 = format passed
+//         through). Overwriting their first two words therefore destroys
+//         nothing: the frame they set up is only ever torn back down.
+//       - 0x00119508 is live and complete: DIntr(0x1208e0) ->
+//         __pformatter(WriteProc=0x119378, buf=sp, 0xFFFFFFFF, fmt=a0,
+//         va=sp+0x88) at 0x118608 -> EIntr(0x120930).
+//       - Its WriteProc chain actually reaches the emulator console:
+//         0x119378 -> deci2Putchar(0x1182b8), which line-buffers into
+//         0x003D5440 and flushes on '\n' or at 0x7E chars through
+//         kputs(0x117d10) -> DECI2. PCSX2 captures exactly that as EE
+//         console output. (Function names here are the analyzer's, not
+//         guesses -- see config/SLUS_212.07/functions.enriched.csv.)
+//       - 554 call sites target the stubbed 0x146e20 and 176 target
+//         0x321620, so the patch lights up a large fraction of the binary.
+//       - 0x00119508 has exactly 19 *other* live call sites, and grepping
+//         them shows they are all Sony SDK failure paths -- WaitDma,
+//         WatchDma, _getpic, sceCdLayerSearchFile, _sceCd_{n,s}cmd_prechk,
+//         sceCdDiskReady_old, sceSdRemoteCallbackInit, sceMcUdCheckNewCard,
+//         _send_to_iop. None of them fire on a healthy boot, which is why
+//         an *unpatched* run legitimately shows zero EE-console output
+//         while the IOP console is chatty. Silence upstream of this patch
+//         is the expected result, not evidence of a hang.
+//     (An earlier revision of this header claimed a pre-existing
+//     `j 0x00119508` tail-call at 0x00115ba0 as precedent for the encoding.
+//     No function starts at that address in our map and no `j` -- as
+//     opposed to `jal` -- to 0x119508 exists anywhere in the main ELF, so
+//     that precedent is withdrawn. The encoding is still right; the
+//     reasoning below stands on its own.)
+//
+// Mechanism: the written word 0x08046542 is a plain MIPS `j 0x00119508`
+// (opcode 2, NOT `jal`) -- it deliberately does not touch $ra, so when the
+// shared routine finishes it returns straight to the *original*
+// printf()/battle-log caller instead of back into the gutted wrapper. This
+// is why a tail-jump works here where a call would corrupt the return
+// address.
+// ---------------------------------------------------------------------------
+
+// NOTE (2026-08-17): these patch lines deliberately sit in the *default*
+// (unlabelled) group. An earlier revision wrapped them in a named group
+// header -- `[Re-enable Debug Logging]` with author=/description= lines --
+// which is what a distributable cheat file looks like. PCSX2 loaded it
+// ("Found 1 game patches in .../SLUS-21207_F4715852.pnach") but produced no
+// EE-console output at all across a full 60s boot, and no per-game settings
+// file (config/PCSX2/gamesettings/) was ever written to enable that group.
+// Labelled groups are the user-selectable kind; the unlabelled group is the
+// one applied unconditionally whenever Enable Patches is on. Keep it that
+// way -- an oracle harness must not depend on a checkbox being ticked. The
+// group's description is preserved as the comments above/below instead.
+//
+// Restores two stubbed debug-log call sites (general printf + battle logger)
+// so retail logs boot/load/thread activity to the TTY console.
+
+// General-purpose printf() wrapper, FUN_00146e20..0x00146e4b (44 bytes).
+// Stock retail: addiu sp,sp,-0x40 / sd a0,0(sp) / ... / jr ra -- decompiles
+// to `void FUN_00146e20(void) { return; }`.
+// Patched:      j 0x00119508      ; nop
+patch=1,EE,00146E20,word,08046542
+patch=1,EE,00146E24,word,00000000
+
+// Battle-system "Debug Logging In Battle" wrapper, FUN_00321620..0x00321647
+// (40 bytes). Same shape, larger frame (more locals live at the call site).
+// Patched:      j 0x00119508      ; nop
+patch=1,EE,00321620,word,08046542
+patch=1,EE,00321624,word,00000000

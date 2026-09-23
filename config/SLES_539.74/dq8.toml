@@ -1,0 +1,18 @@
+# Incomplete PAL configuration; gameplay support targets NTSC-U.
+# Paths are relative to the repository root.
+
+[general]
+input = "../Extracted_Eur/SLES_539.74"
+# PAL function-map integration and SDK bindings remain unfinished.
+ghidra_output = ""
+output = "build/generated/SLES_539.74/main"
+single_file_output = false
+low_memory_mode = false
+output_worker_threads = 0
+patch_syscalls = false
+patch_cop0 = false
+patch_cache = false
+stubs = []
+skip = []
+
+[patches]

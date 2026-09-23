@@ -1,0 +1,114 @@
+# Metrowerks MWo3 overlay table — Dragon Quest 8 NTSC-U (SLUS_212.07).
+#
+# Decoded from the 0x40-byte MWo3 header at the start of each BIN/*.BIN on
+# disc, cross-checked against the six zero-filesz PT_LOAD segments in the
+# main ELF (each segment's memsz == 0x40 header + text + data + bss, exact
+# for all six overlays — including VIEWER.BIN).
+# Full format spec: https://github.com/Sinan-Karakaya/DQ8-Recompiled/wiki/File-Formats
+#
+# MWo3 0x40 header layout (all fields little-endian u32 unless noted):
+#   0x00  char[4]  magic       "MWo3"
+#   0x04  u32      id          overlay id (see table below)
+#   0x08  u32      load_addr   destination address of the whole file image
+#                              (header included) — 0x00461C80 for every US
+#                              overlay; .text therefore begins at
+#                              load_addr + 0x40 = 0x00461CC0
+#   0x0C  u32      text_size   bytes of .text following the header in file
+#   0x10  u32      data_size   bytes of .data following .text in file
+#   0x14  u32      bss_size    bytes of .bss zero-filled after .data in RAM
+#                              (not present in the file)
+#   0x18  u32      ctor_begin  VA of static-constructor pointer array start
+#   0x1C  u32      ctor_end    VA one past the array end (the loader calls
+#                              each function pointer in [ctor_begin,ctor_end))
+#   0x20  char[32] name        NUL-padded ASCII overlay name
+#
+# File layout: [0x40 header][.text][.data]; file size == 0x40 + text + data
+# (verified for all six US BINs). RAM layout after load: header at
+# 0x00461C80, then text/data/bss contiguous.
+#
+# Overlay arena: 0x00461C80 .. 0x00489A80 (159.5 KiB). The arena end equals
+# load_addr + the largest overlay memsz (battle: 0x40+0x23AC0+0x2680+0x1C80
+# = 0x27E00) and matches the final PT_LOAD vaddr in the ELF. Exactly one
+# overlay is resident at a time; the game loads them from
+# cdrom0:\BIN\<NAME>.BIN;1.
+#
+# NOTE: unlike PAL retail, the US disc SHIPS VIEWER.BIN (id 2, 1152 bytes)
+# — the debug/viewer overlay that PAL strips while still reserving its
+# 0x500-byte PT_LOAD. The US PT_LOAD reservation (0x500) matches this file's
+# memsz exactly, confirming the PAL reservation was for the same overlay.
+
+version = "SLUS_212.07"
+arena_start = 0x00461C80
+arena_end = 0x00489A80
+
+[[overlay]]
+file = "BIN/CASINO.BIN"
+id = 1
+load_addr = 0x00461C80
+text_addr = 0x00461CC0
+text_size = 0x0001ADC0
+data_size = 0x00004D80
+bss_size = 0x00001380
+ctor_begin = 0x004817C0
+ctor_end = 0x004817D4
+name = "casino.bin"
+
+[[overlay]]
+file = "BIN/VIEWER.BIN"
+id = 2
+load_addr = 0x00461C80
+text_addr = 0x00461CC0
+text_size = 0x00000240
+data_size = 0x00000200
+bss_size = 0x00000080
+ctor_begin = 0x00462080
+ctor_end = 0x00462090
+name = "viewer.bin"
+
+[[overlay]]
+file = "BIN/SHOP.BIN"
+id = 3
+load_addr = 0x00461C80
+text_addr = 0x00461CC0
+text_size = 0x0000F040
+data_size = 0x00005F80
+bss_size = 0x00002B00
+ctor_begin = 0x00476C20
+ctor_end = 0x00476C2C
+name = "shop.bin"
+
+[[overlay]]
+file = "BIN/MENU.BIN"
+id = 4
+load_addr = 0x00461C80
+text_addr = 0x00461CC0
+text_size = 0x000195C0
+data_size = 0x00001500
+bss_size = 0x00002200
+ctor_begin = 0x0047C720
+ctor_end = 0x0047C730
+name = "menu.bin"
+
+[[overlay]]
+file = "BIN/BATTLE.BIN"
+id = 5
+load_addr = 0x00461C80
+text_addr = 0x00461CC0
+text_size = 0x00023AC0
+data_size = 0x00002680
+bss_size = 0x00001C80
+ctor_begin = 0x00487D80
+ctor_end = 0x00487D94
+name = "battle.bin"
+
+[[overlay]]
+file = "BIN/TITLE.BIN"
+id = 6
+load_addr = 0x00461C80
+text_addr = 0x00461CC0
+text_size = 0x00004AC0
+data_size = 0x00000680
+bss_size = 0x00000600
+ctor_begin = 0x00466DA0
+ctor_end = 0x00466DB8
+name = "title.bin"

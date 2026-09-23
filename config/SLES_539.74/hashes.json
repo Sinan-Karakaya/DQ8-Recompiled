@@ -1,0 +1,59 @@
+{
+  "version": "SLES_539.74",
+  "title": "Dragon Quest: The Journey of the Cursed King",
+  "region": "PAL",
+  "generated": "2026-08-17",
+  "comment": "Known-good hashes for the supported PAL dump. 'iso.name' is informational only (dump filenames vary); sizes and sha256 are authoritative. 'files' keys are paths relative to the extracted ISO root. 'elf' names the boot executable entry inside 'files'.",
+  "iso": {
+    "name": "DQ8_Eur.iso",
+    "sha256": "dc26eef7f0cca165a236a4ccf944bdd2720bb0637f1e74c7a7a4362875cb701d",
+    "size": 4067000320
+  },
+  "elf": "SLES_539.74",
+  "files": {
+    "SLES_539.74": {
+      "sha256": "7e9dc0e8255bebb955c0c603cb3d22e962fc1454501d9ec58fdcce921e133a22",
+      "size": 3016352
+    },
+    "SYSTEM.CNF": {
+      "sha256": "d048f57d6b664ed86bd428640c2e6e296d3cdd296255fa8a6adad011284c3ee2",
+      "size": 56
+    },
+    "BIN/BATTLE.BIN": {
+      "sha256": "3054b924f87b322d6bdeb367efc31fb8b72029e81852cd66492dea1a0a16d1f3",
+      "size": 156544
+    },
+    "BIN/CASINO.BIN": {
+      "sha256": "ab2345667a49ee1ef08dffd31ca36c40412f1889822b99d073547ef2b5796d28",
+      "size": 132992
+    },
+    "BIN/MENU.BIN": {
+      "sha256": "d0935df3974c8f04f519951192ed85a6294b5549620af871590f95bd342b095d",
+      "size": 110592
+    },
+    "BIN/SHOP.BIN": {
+      "sha256": "ae9f1d1b1d9911d1a33be864db12a086f89c07ef24c9e5c1cd85ea5f541f9082",
+      "size": 86656
+    },
+    "BIN/TITLE.BIN": {
+      "sha256": "5a82ff3750a7eeec975c2c2fa3384c9d3a66ec5f8acd7aa9944360dba30dfcaa",
+      "size": 21632
+    },
+    "DATA.HD6": {
+      "sha256": "84fa7c814ed94f41c10a9459dac06f19fbe5a998bff46c56b757c90b1dccd8c4",
+      "size": 199092
+    },
+    "DATA2.HD6": {
+      "sha256": "0375d982e84bff9e62d2fd7bc9e38c503ed540a6265527e9fdb5ee676a663bb7",
+      "size": 87092
+    },
+    "DATA.DAT": {
+      "sha256": "f274114dfeae0306ae21a00eaae7e2e5fa4ad7eee0b8a1019f955124f168ba4c",
+      "size": 1902559232
+    },
+    "DATA2.DAT": {
+      "sha256": "838feccdf9c9fd147262469ec95a7a5b3f54ef81d0c23cdfa2caa7a3907bfad0",
+      "size": 752971776
+    }
+  }
+}

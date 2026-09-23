@@ -1,0 +1,468 @@
+# NTSC-U resident executable. Run setup.py recompile to resolve local paths.
+
+[general]
+# Boot executable from the user's extracted disc (never committed).
+input = "../Extracted_Usa/SLUS_212.07"
+
+# Function boundaries and SDK names maintained by the analysis tools.
+ghidra_output = "config/SLUS_212.07/functions.enriched.csv"
+
+# Generated C++ lands in gitignored build/.
+output = "build/generated/SLUS_212.07"
+
+# Per-function files (upstream default) — one .cpp per function is far
+# better for triage (size outliers, per-function compile smoke tests).
+single_file_output = false
+low_memory_mode = false
+# 0 = auto
+output_worker_threads = 0
+
+# Upstream source defaults: syscalls handled by runtime, COP0/cache patched.
+patch_syscalls = false
+patch_cop0 = true
+patch_cache = true
+
+# SDK calls implemented by the runtime. Keep syscall wrappers, private SDK
+# internals, and the complete guest allocator translated; their ABIs and state
+# ownership differ from public SDK entry points.
+stubs = [
+    "sceGsResetGraph@0x00108398",
+    "sceGsResetPath@0x00108538",
+    "sceGsSetDefDispEnv@0x00108650",
+    "sceGsPutDispEnv@0x001089C8",
+    "sceGszbufaddr@0x00108A88",
+    "sceGsSetDefDrawEnv@0x00108B50",
+    "sceGsSetDefClear@0x00108D38",
+    "sceGsPutDrawEnv@0x00108E40",
+    "sceGsSetDefDBuff@0x00108F28",
+    "sceGsSwapDBuff@0x001091C0",
+    "sceGsSyncV@0x00109220",
+    "sceGsSyncPath@0x001092B8",
+    "sceGsSetDefStoreImage@0x001095D0",
+    "sceGsExecStoreImage@0x00109710",
+    "sceGsSyncVCallback@0x00109DA0",
+    "memclr@0x00109F60",
+    "sceDmaGetChan@0x00109F98",
+    "sceDmaReset@0x00109FC0",
+    "sceDmaPutEnv@0x0010A0A0",
+    "sceDmaGetEnv@0x0010A278",
+    "sceDmaSend@0x0010A2C8",
+    "sceDmaSendN@0x0010A330",
+    "sceDmaSendI@0x0010A3A8",
+    "sceDmaRecv@0x0010A420",
+    "sceDmaRecvN@0x0010A468",
+    "sceDmaRecvI@0x0010A4E8",
+    "sceDmaSync@0x0010A568",
+    "sceDmaWatch@0x0010A5A0",
+    "sceDmaPause@0x0010A5D8",
+    # sceGifPk* deliberately NOT stubbed: they only assemble GIF packets in
+    # guest memory, and the runtime stubs double the DMA tag's qword count
+    # (header measures 3 qwords, stubbed path emits qwc=6). See movie-decode.md.
+    "sceVu0ApplyMatrix@0x0010AB48",
+    "sceVu0MulMatrix@0x0010AB78",
+    "sceVu0InnerProduct@0x0010ABE0",
+    "sceVu0Normalize@0x0010AC08",
+    "sceVu0TransposeMatrix@0x0010AC48",
+    "sceVu0InversMatrix@0x0010AC90",
+    "sceVu0DivVector@0x0010AD00",
+    "sceVu0DivVectorXYZ@0x0010AD20",
+    "sceVu0InterVector@0x0010AD40",
+    "sceVu0TransMatrix@0x0010ADC8",
+    "sceVu0CopyMatrix@0x0010AE08",
+    "sceVu0UnitMatrix@0x0010AE70",
+    "sceVu0RotMatrixZ@0x0010AF10",
+    "sceVu0RotMatrixX@0x0010AFB8",
+    "sceVu0RotMatrixY@0x0010B060",
+    "sceVu0RotMatrix@0x0010B108",
+    "sceVu0ClampVector@0x0010B158",
+    "sceVu0CameraMatrix@0x0010B180",
+    "sceVu0NormalLightMatrix@0x0010B230",
+    "sceVu0LightColorMatrix@0x0010B2F0",
+    "sceVu0ViewScreenMatrix@0x0010B358",
+    "sceVu0DropShadowMatrix@0x0010B460",
+    "sceVu0RotTransPersN@0x0010B5F0",
+    "sceVu0RotTransPers@0x0010B648",
+    "sceVu0InterVectorXYZ@0x0010B6B0",
+    "sceVu0ClipScreen@0x0010B6F8",
+    "sceVu0ClipScreen3@0x0010B740",
+    "sceVu0ClipAll@0x0010B7A0",
+    "sceVpu0Reset@0x0010B830",
+    "sceMpegCreate@0x00110728",
+    "sceMpegInit@0x001112D0",
+    "sceMpegAddBs@0x00111388",
+    "sceMpegGetPicture@0x001113C8",
+    "sceMpegGetPictureRAW8@0x00111410",
+    "sceMpegReset@0x00111468",
+    "sceMpegGetDecodeMode@0x00111520",
+    "sceMpegAddCallback@0x00111540",
+    "sceMpegClearRefBuff@0x001116F8",
+    "sceMpegGetPictureRAW8xy@0x00111750",
+    "sceMpegDemuxPssRing@0x001155C0",
+    "sceMpegAddStrCallback@0x001159C0",
+    "sceIpuStopDMA@0x00115E98",
+    "sceIpuRestartDMA@0x00115F80",
+    "sceIpuSync@0x001160D0",
+    "sceIpuInit@0x001161B0",
+    "write@0x00116DE8",
+    "read@0x00116E68",
+    "sceDeci2Open@0x00117B00",
+    "sceDeci2Close@0x00117B48",
+    "sceDeci2ReqSend@0x00117B70",
+    "sceDeci2Poll@0x00117BA0",
+    "sceDeci2ExRecv@0x00117C20",
+    "sceDeci2ExSend@0x00117C58",
+    "sceDeci2ExReqSend@0x00117C90",
+    "sceDeci2ExLock@0x00117CC0",
+    "sceDeci2ExUnLock@0x00117CE8",
+    "sceTtyHandler@0x00117DE0",
+    "sceTtyWrite@0x00117F78",
+    "sceTtyRead@0x001180F0",
+    "sceTtyInit@0x001181C0",
+    "sceSifInitCmd@0x00119680",
+    "sceSifExitCmd@0x00119900",
+    "sceSifAddCmdHandler@0x00119968",
+    "sceSifRemoveCmdHandler@0x001199E0",
+    "sceSifSendCmd@0x00119B68",
+    "sceSifWriteBackDCache@0x00119D30",
+    "sceSifInitRpc@0x00119DE0",
+    "sceSifGetOtherData@0x0011A2C0",
+    "sceSifBindRpc@0x0011A588",
+    "sceSifCheckStatRpc@0x0011A968",
+    "sceSifSetRpcQueue@0x0011A9A8",
+    "sceSifRegisterRpc@0x0011AA40",
+    "sceSifRemoveRpc@0x0011AB10",
+    "sceSifRemoveRpcQueue@0x0011ABA8",
+    "sceSifGetNextRequest@0x0011AC38",
+    "sceSifExecRequest@0x0011AC90",
+    "sceSifRpcLoop@0x0011AE58",
+    "sceFsInit@0x0011B6A8",
+    "sceFsReset@0x0011B940",
+    "sceOpen@0x0011BBA8",
+    "sceClose@0x0011BE38",
+    "sceLseek@0x0011BFB0",
+    "sceRead@0x0011C1F0",
+    "sceWrite@0x0011C460",
+    "sceIoctl@0x0011C720",
+    "sceSifInitIopHeap@0x0011EAD0",
+    "sceSifAllocIopHeap@0x0011EB58",
+    "sceSifAllocSysMemory@0x0011EBC8",
+    "sceSifLoadIopHeap@0x0011ECE0",
+    "sceSifLoadFileReset@0x0011F1B0",
+    # Bind the public wrapper; the internal entry has a different ABI.
+    "sceSifLoadModule@0x0011FA20",
+    "sceSifLoadElf@0x0011FB88",
+    "sceSifGetIopAddr@0x0011FBB0",
+    "sceSifSetIopAddr@0x0011FCA0",
+    "sceSifResetIop@0x0011FD80",
+    "sceSifIsAliveIop@0x0011FED8",
+    "sceSifSyncIop@0x0011FF00",
+    "sceSifRebootIop@0x0011FF50",
+    "sceSdRemoteInit@0x00122B10",
+    "sceSdTransToIOP@0x00122BC0",
+    "sceSdRemote@0x00122C68",
+    "__ieee754_rem_pio2f@0x00126468",
+    "__kernel_cosf@0x00127EB0",
+    "__kernel_sinf@0x00128868",
+    "atan@0x00128BF8",
+    "cos@0x00129108",
+    "fabs@0x00129230",
+    "floor@0x00129288",
+    "sin@0x00129710",
+    "tan@0x00129848",
+    "sceCdCallback@0x0012A068",
+    "sceCdInitEeCB@0x0012A240",
+    "sceCdNcmdDiskReady@0x0012AAE8",
+    "sceCdSync@0x0012AB80",
+    "sceCdSyncS@0x0012AC20",
+    "sceCdInit@0x0012AE98",
+    "sceCdDiskReady@0x0012B398",
+    "sceCdRead@0x0012B5B8",
+    "sceCdSeek@0x0012B798",
+    "sceCdGetDiskType@0x0012B900",
+    "sceCdGetError@0x0012B928",
+    "sceCdMmode@0x0012BA88",
+    # Also not from gen_stubs.py, same reason as sceSifLoadModule above:
+    # ps2_analyzer matched only sceCdLayerSearchFile (0x0012A670), so this
+    # wrapper stayed unnamed and the guest ran the real async CD path,
+    # waiting forever on a completion no IOP will deliver.
+    "sceCdSearchFile@0x0012A970",
+    "sceCdTrayReq@0x0012BB80",
+    "scePadInit@0x0012BC70",
+    "scePadInit2@0x0012BDF8",
+    "scePadEnd@0x0012BEF0",
+    "scePadPortOpen@0x0012C098",
+    "scePadPortClose@0x0012C280",
+    "scePadGetDmaStr@0x0012C338",
+    "scePadGetFrameCount@0x0012C490",
+    "scePadRead@0x0012C4E8",
+    "scePadGetState@0x0012C560",
+    "scePadStateIntToStr@0x0012C5D8",
+    "scePadSetReqState@0x0012C610",
+    "scePadGetReqState@0x0012C6C8",
+    "scePadInfoAct@0x0012C758",
+    "scePadInfoComb@0x0012C870",
+    "scePadInfoMode@0x0012C988",
+    "scePadSetMainMode@0x0012CAC0",
+    "scePadSetActDirect@0x0012CB78",
+    "scePadSetActAlign@0x0012CC40",
+    "scePadGetButtonMask@0x0012CD18",
+    "scePadSetButtonInfo@0x0012CDC8",
+    "scePadInfoPressMode@0x0012CE78",
+    "scePadEnterPressMode@0x0012CED8",
+    "scePadExitPressMode@0x0012CF30",
+    "scePadSetVrefParam@0x0012CF88",
+    "scePadGetPortMax@0x0012D058",
+    "scePadGetSlotMax@0x0012D0C0",
+    "scePadGetModVersion@0x0012D128",
+    "scePadSetWarningLevel@0x0012D190",
+    "sceMcInit@0x0012D330",
+    "sceMcEnd@0x0012D558",
+    "sceMcChangeThreadPriority@0x0012D5C0",
+    "sceMcGetSlotMax@0x0012D680",
+    "sceMcOpen@0x0012D740",
+    "sceMcMkdir@0x0012D868",
+    "sceMcClose@0x0012D8A0",
+    "sceMcSeek@0x0012D960",
+    "mceIntrReadFixAlign@0x0012DA40",
+    "sceMcRead@0x0012DAF0",
+    "sceMcWrite@0x0012DC08",
+    "sceMcSync@0x0012DD80",
+    "mceGetInfoApdx@0x0012DE48",
+    "sceMcGetInfo@0x0012DEA0",
+    "sceMcGetDir@0x0012E090",
+    "mceStorePwd@0x0012E1E0",
+    "sceMcChdir@0x0012E270",
+    "sceMcFormat@0x0012E3B0",
+    "sceMcDelete@0x0012E480",
+    "sceMcFlush@0x0012E5A0",
+    "sceMcSetFileInfo@0x0012E660",
+    "sceMcRename@0x0012E830",
+    "sceMcUnformat@0x0012E988",
+    "sceMcGetEntSpace@0x0012EA58",
+    "exit@0x001301C8",
+    "fflush@0x00130278",
+    "fseek@0x00130B48",
+    "ftell@0x00131058",
+    "memchr@0x00132518",
+    "memcmp@0x001325F8",
+    "memcpy@0x00132690",
+    "memmove@0x00132740",
+    "memset@0x00132848",
+    "rand@0x001343F8",
+    "strcasecmp@0x001352A0",
+    "strcat@0x00135378",
+    "strchr@0x001354A8",
+    "strcmp@0x00135638",
+    "strcpy@0x00135780",
+    "strlen@0x00135898",
+    "strncat@0x00135AA8",
+    "strncmp@0x00135C58",
+    "strncpy@0x00135E10",
+    "strrchr@0x00135FD0",
+    "strstr@0x00136020",
+    "vsprintf@0x00139E38",
+    "__divdi3@0x0013A1E0",
+    "sceVu0InnerProduct@0x0013CDB0",
+    "sceVu0Normalize@0x0013CDE0",
+    "sceVu0ApplyMatrix@0x0013DD40",
+]
+
+skip = [
+]
+
+# Loads/stores whose target is a known EE hardware register, mapped
+# instruction address -> device address. Without this the translator emits a
+# direct memory access for anything it can resolve statically; with it, the
+# access goes through runtime->LoadN/StoreN so the runtime's device models see
+# it. Recovered by ps2_analyzer; 4 further sites it reported inside the rodata
+# junk region (0x387000-0x3CF910) are omitted.
+#
+# 187 sites: 143 Timer, 20 DMAC channel registers, 15 IPU, 9 DMAC/INTC control.
+[mmio]
+"0x10b840" = "0x10000000"
+"0x10b848" = "0x10000000"
+"0x10b854" = "0x10000000"
+"0x10c1a8" = "0x10000000"
+"0x10caa8" = "0x10000000"
+"0x10cab8" = "0x10000000"
+"0x10cb44" = "0x10000000"
+"0x10cb98" = "0x10000000"
+"0x10cbe0" = "0x10000000"
+"0x10cce4" = "0x10000000"
+"0x10ccf4" = "0x10000000"
+"0x10cd84" = "0x10000000"
+"0x10cdd8" = "0x10000000"
+"0x10cfe8" = "0x10000000"
+"0x10d010" = "0x10000000"
+"0x10d11c" = "0x10000000"
+"0x10d144" = "0x10000000"
+"0x10d1ac" = "0x10000000"
+"0x10d1d4" = "0x10000000"
+"0x10d308" = "0x10000000"
+"0x10d330" = "0x10000000"
+"0x10d5d8" = "0x10000000"
+"0x10d600" = "0x10000000"
+"0x10daf4" = "0x10000000"
+"0x10db18" = "0x10000000"
+"0x10ddd8" = "0x10000000"
+"0x10df4c" = "0x10000000"
+"0x10e038" = "0x10000000"
+"0x10e0ac" = "0x10000000"
+"0x10e128" = "0x10000000"
+"0x10e510" = "0x10000000"
+"0x10f294" = "0x10000000"
+"0x10f29c" = "0x10000000"
+"0x10f2ac" = "0x10000000"
+"0x10f834" = "0x10000000"
+"0x10f888" = "0x10000000"
+"0x10f8ac" = "0x10000000"
+"0x10f8bc" = "0x10000000"
+"0x10f8cc" = "0x10000000"
+"0x10f8dc" = "0x10002000"
+"0x10f934" = "0x10000000"
+"0x10f988" = "0x10000000"
+"0x10f9ac" = "0x10000000"
+"0x10f9bc" = "0x10000000"
+"0x10f9c8" = "0x10000000"
+"0x10f9e8" = "0x10002000"
+"0x10fda0" = "0x10000000"
+"0x10fde0" = "0x10000000"
+"0x10fed8" = "0x10000000"
+"0x10ff4c" = "0x10002010"
+"0x10ff74" = "0x10002010"
+"0x10ff7c" = "0x10002010"
+"0x10ffa4" = "0x10002010"
+"0x10ffac" = "0x10002010"
+"0x10ffd4" = "0x10002010"
+"0x110258" = "0x10000000"
+"0x110404" = "0x10000000"
+"0x110668" = "0x10000000"
+"0x110a24" = "0x10000000"
+"0x110a2c" = "0x10000000"
+"0x110a3c" = "0x10000000"
+"0x110a88" = "0x10000000"
+"0x110ab8" = "0x10000000"
+"0x110af0" = "0x10000000"
+"0x110af8" = "0x10000000"
+"0x110b00" = "0x10000000"
+"0x110b18" = "0x10000000"
+"0x111b38" = "0x10000000"
+"0x111b40" = "0x10000000"
+"0x111b4c" = "0x10000000"
+"0x111b58" = "0x10000000"
+"0x111b80" = "0x10000000"
+"0x111bb4" = "0x10000000"
+"0x111bbc" = "0x10000000"
+"0x111bc8" = "0x10000000"
+"0x111bd4" = "0x10000000"
+"0x111bf8" = "0x10000000"
+"0x111c20" = "0x10000000"
+"0x1125a0" = "0x10000000"
+"0x1125c4" = "0x10000000"
+"0x1125d4" = "0x10000000"
+"0x1125e0" = "0x10000000"
+"0x112604" = "0x10000000"
+"0x112660" = "0x10000000"
+"0x1126fc" = "0x10000000"
+"0x112710" = "0x10002010"
+"0x112720" = "0x10000000"
+"0x11274c" = "0x10000000"
+"0x1127e0" = "0x10000000"
+"0x1127fc" = "0x10000000"
+"0x112804" = "0x10000000"
+"0x112814" = "0x10000000"
+"0x1128a4" = "0x10000000"
+"0x1128ac" = "0x10000000"
+"0x1128bc" = "0x10000000"
+"0x1128e0" = "0x10000000"
+"0x112938" = "0x10000000"
+"0x112960" = "0x10000000"
+"0x1129d0" = "0x10000000"
+"0x112a54" = "0x10000000"
+"0x112a5c" = "0x10000000"
+"0x112a6c" = "0x10000000"
+"0x112a90" = "0x10000000"
+"0x112ae8" = "0x10000000"
+"0x112b10" = "0x10000000"
+"0x112b90" = "0x10000000"
+"0x112ba8" = "0x10000000"
+"0x112bbc" = "0x10000000"
+"0x112c04" = "0x10000000"
+"0x112c10" = "0x1000b020"
+"0x112c20" = "0x1000b000"
+"0x112ca0" = "0x1000b020"
+"0x112ca8" = "0x1000b000"
+"0x112cd8" = "0x10000000"
+"0x112d10" = "0x10000000"
+"0x112d28" = "0x10000000"
+"0x112d68" = "0x10000000"
+"0x112d84" = "0x10000000"
+"0x115bc8" = "0x10000000"
+"0x115c24" = "0x10000000"
+"0x115c2c" = "0x10000000"
+"0x115c3c" = "0x10000000"
+"0x115c88" = "0x10000000"
+"0x115cb4" = "0x10000000"
+"0x115d04" = "0x10000000"
+"0x115dcc" = "0x10000000"
+"0x115e44" = "0x10000000"
+"0x11615c" = "0x10000000"
+"0x116ccc" = "0x10000000"
+"0x116cf0" = "0x10000000"
+"0x116d20" = "0x10000000"
+"0x116d6c" = "0x10000000"
+"0x116d90" = "0x10000000"
+"0x116dbc" = "0x1000f000"
+"0x118288" = "0x10000000"
+"0x1212d0" = "0x10000000"
+"0x121420" = "0x10000000"
+"0x121450" = "0x10000000"
+"0x1214e0" = "0x10000000"
+"0x121574" = "0x10000000"
+"0x121648" = "0x10000000"
+"0x1217fc" = "0x10000000"
+"0x121800" = "0x10000000"
+"0x121840" = "0x10001000"
+"0x121958" = "0x10000000"
+"0x121960" = "0x10000000"
+"0x121990" = "0x10001000"
+"0x1219bc" = "0x10001000"
+"0x1219c4" = "0x10001010"
+"0x1219f4" = "0x10001000"
+"0x121a48" = "0x10000010"
+"0x121aac" = "0x10000010"
+"0x14359c" = "0x10000000"
+"0x1435fc" = "0x10000000"
+"0x143ac8" = "0x10000000"
+"0x1453d4" = "0x10000000"
+"0x160388" = "0x10000010"
+"0x1607d0" = "0x10003c10"
+"0x19f5f0" = "0x10002020"
+"0x19f9e4" = "0x1000b010"
+"0x19f9ec" = "0x1000b020"
+"0x19fa04" = "0x1000f520"
+"0x19fa3c" = "0x10002010"
+"0x19fa60" = "0x10002010"
+"0x19fa80" = "0x1000b410"
+"0x19fa84" = "0x1000b430"
+"0x19fa88" = "0x1000b420"
+"0x19faa4" = "0x10002010"
+"0x19fc04" = "0x1000f520"
+"0x19fc88" = "0x1000f520"
+"0x19fcb8" = "0x1000b410"
+"0x19fcc0" = "0x1000b430"
+"0x19fcc8" = "0x1000b420"
+"0x19fcdc" = "0x10002010"
+"0x19fd08" = "0x1000f520"
+"0x19fd38" = "0x1000b010"
+"0x19fd40" = "0x1000b020"
+"0x19fdc0" = "0x1000f520"
+"0x19fdf4" = "0x1000b400"
+"0x19fdf8" = "0x1000b410"
+"0x19fff4" = "0x1000f520"
+"0x1a0270" = "0x1000f520"
+"0x1a1404" = "0x1000f520"
+"0x1a1438" = "0x1000b420"
+"0x1a143c" = "0x1000b410"
+"0x1a1440" = "0x1000b430"
+"0x1a1f78" = "0x1000e000"
