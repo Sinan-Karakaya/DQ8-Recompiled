@@ -19,6 +19,12 @@ Generic PS2 behavior belongs in the PS2Recomp submodule. DQ8-specific integratio
 belongs here. A submodule update must refer to a commit accessible in its
 configured remote; include the corresponding source changes in the review.
 
+CI runs one Linux x86-64 job for code changes on `main` and ready pull requests.
+It checks source distribution, tooling, VU code generation, the launcher stub,
+and CPU graphics tests. Documentation-only changes and draft PRs skip CI.
+For ARM64, select **CI → Run workflow → arm64** in GitHub Actions.
+Full game builds, SDL GPU validation, and gameplay checks remain local.
+
 ## Code and tests
 
 Use C++20 for runtime code and Python 3.10 or newer for scripts. Follow the style

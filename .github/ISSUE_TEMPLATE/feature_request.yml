@@ -1,0 +1,22 @@
+name: Feature request
+description: Propose an improvement to the project or its tools.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the [current priorities](https://github.com/Sinan-Karakaya/DQ8-Recompiled/wiki/Project-Status) and existing issues before proposing work.
+        Do not upload game files, generated game code, decryption keys, saves, or game-derived memory/graphics captures. See [CONTRIBUTE.md](https://github.com/Sinan-Karakaya/DQ8-Recompiled/blob/main/CONTRIBUTE.md).
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: Explain who needs this change and what is difficult or missing today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed improvement
+      description: Describe the desired behavior, its scope, and any alternatives you considered.
+    validations:
+      required: true

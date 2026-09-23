@@ -1,0 +1,52 @@
+name: Bug report
+description: Report a build, runtime, or rendering problem.
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Check the [current status](https://github.com/Sinan-Karakaya/DQ8-Recompiled/wiki/Project-Status) and existing issues first.
+        Do not upload game files, generated game code, decryption keys, saves, or game-derived memory/graphics captures. Remove private paths and data from logs; see [CONTRIBUTE.md](https://github.com/Sinan-Karakaya/DQ8-Recompiled/blob/main/CONTRIBUTE.md).
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Include the revision and configuration used. Write N/A where a field does not apply.
+      placeholder: |
+        Commit:
+        Game version (for example, SLUS_212.07):
+        OS and version:
+        CPU / GPU:
+        Renderer (sdlgpu or sw) and resolution scale:
+        Build options or other configuration changes:
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Give the command or scene, the steps taken, and how often it happens. State whether it also occurs with default settings.
+      placeholder: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Describe the failure or visual difference. For performance problems, include the scene and measurement duration.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Relevant diagnostics (optional)
+      description: Paste a short, sanitized log excerpt or error message. Do not include game data or private paths.
+      render: text

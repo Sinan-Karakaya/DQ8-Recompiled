@@ -1,59 +1,73 @@
-# Public CI uses authored source and fixtures only; the game corpus stays local.
-
-name: build
+name: CI
 
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - '**/*.md'
+      - LICENSE
+      - NOTICE
+      - '.github/ISSUE_TEMPLATE/**'
   pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore:
+      - '**/*.md'
+      - LICENSE
+      - NOTICE
+      - '.github/ISSUE_TEMPLATE/**'
   workflow_dispatch:
+    inputs:
+      architecture:
+        description: Linux architecture
+        type: choice
+        default: x86_64
+        options: [x86_64, arm64]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}-${{ inputs.architecture || 'x86_64' }}
+  cancel-in-progress: true
 
 jobs:
-  source-checks:
-    runs-on: ubuntu-latest
+  checks:
+    name: Linux ${{ inputs.architecture || 'x86_64' }}
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    runs-on: ${{ inputs.architecture == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
+    timeout-minutes: 10
+    env:
+      CC: clang
+      CXX: clang++
+      PYTHONDONTWRITEBYTECODE: '1'
     steps:
-      - uses: actions/checkout@v4
-      - name: Check distributed files and setup tools
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+
+      - name: Check source and tooling
         run: |
           python3 tools/check_source_distribution.py
           python3 -m unittest discover -s tools/tests -v
           python3 -m unittest discover -s tools/mvi -p 'test_*.py' -v
+          python3 tools/oracle/logdiff.py --self-test
+          python3 -m unittest discover -s thirdparty/PS2Recomp/tools/tests -p test_compile_vu_blocks.py -v
 
-  build-linux:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - runner: ubuntu-latest
-            preset: linux-x86_64-debug
-            arch: x86-64
-          - runner: ubuntu-24.04-arm
-            preset: linux-arm64-debug
-            arch: arm64
-    name: linux-${{ matrix.arch }}
-    runs-on: ${{ matrix.runner }}
-    steps:
-      - name: Checkout (with submodules)
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Install toolchain
+      - name: Build and run launcher stub
         run: |
-          sudo apt-get update
-          sudo apt-get install -y clang lld ninja-build cmake
+          cmake -S . -B build/ci -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+            -DDQ8_BUILD_PS2RECOMP=OFF -DDQ8_LINK_GENERATED=OFF \
+            -DDQ8_GFX_ENABLE_SDLGPU=OFF
+          cmake --build build/ci --target dq8 --parallel 2
+          ./build/ci/src/runtime/dq8
 
-      - name: Tool versions
+      - name: Build CPU graphics tests
         run: |
-          clang --version
-          cmake --version
-          ninja --version
+          cmake -S tools/gsdump -B build/ci-gs -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug -DDQ8_GFX_ENABLE_SDLGPU=OFF
+          cmake --build build/ci-gs --parallel 2 \
+            --target dq8-gs-threaded-tests dq8-gs-transfer-tests
 
-      - name: Configure
-        run: cmake --preset ${{ matrix.preset }}
-
-      - name: Build
-        run: cmake --build --preset ${{ matrix.preset }}
-
-      - name: Run stub
-        run: ./build/${{ matrix.preset }}/src/runtime/dq8
+      - name: Run CPU graphics tests
+        run: ctest --test-dir build/ci-gs -R '^(gs-threaded|gs-transfer)$' --no-tests=error --timeout 60 --output-on-failure
