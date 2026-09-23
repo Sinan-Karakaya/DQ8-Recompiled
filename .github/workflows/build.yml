@@ -81,7 +81,7 @@ jobs:
             aot-shards: 8
             aot-jobs: 2
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     defaults:
       run:
         shell: bash
