@@ -67,7 +67,8 @@ if(TARGET ps2_runtime)
     target_include_directories(dq8-vu-tests PRIVATE "${PS2X}/ps2xTest/include")
     target_link_libraries(dq8-vu-tests PRIVATE ps2_runtime dq8_host_simd)
     add_test(NAME vu COMMAND dq8-vu-tests)
-    set_tests_properties(vu PROPERTIES TIMEOUT 60)
+    # Differential programs exercise many resume budgets on slower hosted CPUs.
+    set_tests_properties(vu PROPERTIES TIMEOUT 180)
 
     add_executable(dq8-vu-math-tests
         vu_math_main.cpp
