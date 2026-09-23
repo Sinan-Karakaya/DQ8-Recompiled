@@ -96,6 +96,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y ninja-build pkg-config libgl-dev \
             libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev \
+            libxss-dev libxtst-dev libxkbcommon-dev libwayland-dev wayland-protocols \
+            libdecor-0-dev libegl1-mesa-dev libgbm-dev libdrm-dev libudev-dev \
+            libasound2-dev libpulse-dev \
             libavcodec-dev libavformat-dev libavutil-dev libswresample-dev libswscale-dev \
             libvulkan-dev mesa-vulkan-drivers glslang-tools libzstd-dev liblzma-dev
 
