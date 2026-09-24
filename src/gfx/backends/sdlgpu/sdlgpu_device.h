@@ -168,6 +168,7 @@ private:
     SDL_GPUTextureFormat m_depthFormat = SDL_GPU_TEXTUREFORMAT_D32_FLOAT;
     bool m_framebufferFetch = false;
     bool createIndex8(std::string &error);
+    void releaseIndex8();
 
     SDL_GPUGraphicsPipeline *m_reinterpretPipeline = nullptr;
     SDL_GPUGraphicsPipeline *m_displayPipeline = nullptr;

@@ -273,17 +273,7 @@ void SdlGpuDevice::destroy() {
     if (m_displayPipeline)
         SDL_ReleaseGPUGraphicsPipeline(m_device, m_displayPipeline);
     m_displayPipeline = nullptr;
-    if (m_index8Pipeline)
-        SDL_ReleaseGPUGraphicsPipeline(m_device, m_index8Pipeline);
-    if (m_index8Palette)
-        SDL_ReleaseGPUTexture(m_device, m_index8Palette);
-    if (m_index8Placement)
-        SDL_ReleaseGPUTexture(m_device, m_index8Placement);
-    if (m_index8Upload)
-        SDL_ReleaseGPUTransferBuffer(m_device, m_index8Upload);
-    m_index8Pipeline = nullptr;
-    m_index8Palette = m_index8Placement = nullptr;
-    m_index8Upload = nullptr;
+    releaseIndex8();
     if (m_sampler)
         SDL_ReleaseGPUSampler(m_device, m_sampler);
     if (m_fragmentShader)
@@ -448,10 +438,14 @@ bool SdlGpuDevice::createIndex8(std::string &error) {
     m_index8Pipeline = SDL_CreateGPUGraphicsPipeline(m_device, &info);
     SDL_ReleaseGPUShader(m_device, fragment);
     SDL_ReleaseGPUShader(m_device, vertex);
-    if (!m_index8Pipeline) {
-        error = std::string("SDL_CreateGPUGraphicsPipeline(index8): ") + SDL_GetError();
+    // Failing part-way leaves nothing behind, so the next texture tries again.
+    const auto fail = [&](const char *what) {
+        error = std::string(what) + ": " + SDL_GetError();
+        releaseIndex8();
         return false;
-    }
+    };
+    if (!m_index8Pipeline)
+        return fail("SDL_CreateGPUGraphicsPipeline(index8)");
 
     SDL_GPUTextureCreateInfo texture{};
     texture.type = SDL_GPU_TEXTURETYPE_2D;
@@ -470,10 +464,8 @@ bool SdlGpuDevice::createIndex8(std::string &error) {
     buffer.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
     buffer.size = 128u * 64u * 4u;
     m_index8Upload = SDL_CreateGPUTransferBuffer(m_device, &buffer);
-    if (!m_index8Palette || !m_index8Placement || !m_index8Upload) {
-        error = std::string("SDL_CreateGPU*(index8 resources): ") + SDL_GetError();
-        return false;
-    }
+    if (!m_index8Palette || !m_index8Placement || !m_index8Upload)
+        return fail("SDL_CreateGPU*(index8 resources)");
 
     // Where each byte of a PSMT8 page lives in the same page read as CT32.
     std::array<uint16_t, 2048> wordPixel{};
@@ -481,10 +473,8 @@ bool SdlGpuDevice::createIndex8(std::string &error) {
         for (uint32_t x = 0u; x < 64u; ++x)
             wordPixel[GSPSMCT32::addrPSMCT32(0u, 1u, x, y) >> 2u] = static_cast<uint16_t>(x | (y << 8u));
     auto *mapped = static_cast<uint8_t *>(SDL_MapGPUTransferBuffer(m_device, m_index8Upload, false));
-    if (!mapped) {
-        error = std::string("SDL_MapGPUTransferBuffer(index8 placement): ") + SDL_GetError();
-        return false;
-    }
+    if (!mapped)
+        return fail("SDL_MapGPUTransferBuffer(index8 placement)");
     for (uint32_t y = 0u; y < 64u; ++y) {
         for (uint32_t x = 0u; x < 128u; ++x) {
             const uint32_t address = GSPSMT8::addrPSMT8(0u, 2u, x, y);
@@ -498,11 +488,13 @@ bool SdlGpuDevice::createIndex8(std::string &error) {
     }
     SDL_UnmapGPUTransferBuffer(m_device, m_index8Upload);
     SDL_GPUCommandBuffer *commands = SDL_AcquireGPUCommandBuffer(m_device);
-    if (!commands) {
-        error = std::string("SDL_AcquireGPUCommandBuffer(index8 placement): ") + SDL_GetError();
-        return false;
-    }
+    if (!commands)
+        return fail("SDL_AcquireGPUCommandBuffer(index8 placement)");
     SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(commands);
+    if (!copy) {
+        SDL_CancelGPUCommandBuffer(commands);
+        return fail("SDL_BeginGPUCopyPass(index8 placement)");
+    }
     const SDL_GPUTextureTransferInfo from{m_index8Upload, 0u, 128u, 64u};
     SDL_GPUTextureRegion to{};
     to.texture = m_index8Placement;
@@ -511,11 +503,23 @@ bool SdlGpuDevice::createIndex8(std::string &error) {
     to.d = 1u;
     SDL_UploadToGPUTexture(copy, &from, &to, false);
     SDL_EndGPUCopyPass(copy);
-    if (!SDL_SubmitGPUCommandBuffer(commands)) {
-        error = std::string("SDL_SubmitGPUCommandBuffer(index8 placement): ") + SDL_GetError();
-        return false;
-    }
+    if (!SDL_SubmitGPUCommandBuffer(commands))
+        return fail("SDL_SubmitGPUCommandBuffer(index8 placement)");
     return true;
+}
+
+void SdlGpuDevice::releaseIndex8() {
+    if (m_index8Pipeline)
+        SDL_ReleaseGPUGraphicsPipeline(m_device, m_index8Pipeline);
+    if (m_index8Palette)
+        SDL_ReleaseGPUTexture(m_device, m_index8Palette);
+    if (m_index8Placement)
+        SDL_ReleaseGPUTexture(m_device, m_index8Placement);
+    if (m_index8Upload)
+        SDL_ReleaseGPUTransferBuffer(m_device, m_index8Upload);
+    m_index8Pipeline = nullptr;
+    m_index8Palette = m_index8Placement = nullptr;
+    m_index8Upload = nullptr;
 }
 
 bool SdlGpuDevice::expandIndexed8(SDL_GPUTexture *target, const uint32_t *palette,
@@ -540,6 +544,11 @@ bool SdlGpuDevice::expandIndexed8(SDL_GPUTexture *target, const uint32_t *palett
         return false;
     }
     SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(commands);
+    if (!copy) {
+        error = std::string("SDL_BeginGPUCopyPass(index8 palette): ") + SDL_GetError();
+        SDL_CancelGPUCommandBuffer(commands);
+        return false;
+    }
     const SDL_GPUTextureTransferInfo from{m_index8Upload, 0u, 256u, 1u};
     SDL_GPUTextureRegion to{};
     to.texture = m_index8Palette;
