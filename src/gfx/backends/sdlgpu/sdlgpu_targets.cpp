@@ -273,18 +273,26 @@ GsSurface *GsTargetCache::findColorSurface(uint32_t base, uint32_t psm) const {
     return nullptr;
 }
 
+namespace {
+bool sampleCompatible(const GsSurface &surface, uint32_t base, uint32_t psm, uint32_t bufferWidth) {
+    const bool compatible = surface.psm == psm || (surface.psm == GS_PSM_CT32 && psm == GS_PSM_CT24);
+    return !surface.depth && surface.base == base && compatible &&
+           surface.bufferWidth == std::max<uint32_t>(bufferWidth, 1u) && !surface.undefined;
+}
+}
+
+GsSurface *GsTargetCache::sampleCandidate(uint32_t base, uint32_t psm, uint32_t bufferWidth) const {
+    for (const auto &candidate : m_surfaces)
+        if (sampleCompatible(*candidate, base, psm, bufferWidth))
+            return candidate.get();
+    return nullptr;
+}
+
 GsSurface *GsTargetCache::findSampleSource(uint32_t base, uint32_t psm,
                                            uint32_t bufferWidth) {
-    bufferWidth = std::max<uint32_t>(bufferWidth, 1u);
     for (const auto &candidate : m_surfaces) {
         GsSurface &surface = *candidate;
-        const bool compatible = surface.psm == psm ||
-            (surface.psm == GS_PSM_CT32 && psm == GS_PSM_CT24);
-        if (surface.depth || surface.base != base || !compatible)
-            continue;
-        if (surface.bufferWidth != bufferWidth)
-            continue;
-        if (surface.undefined)
+        if (!sampleCompatible(surface, base, psm, bufferWidth))
             continue;
 
         // Native CT32 can upload exact CPU patches alongside owned GPU pages.

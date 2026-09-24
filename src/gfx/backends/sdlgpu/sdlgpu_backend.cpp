@@ -136,11 +136,21 @@ struct DrawBatch {
     GsPageSet writtenPages{};
     uint32_t firstVertex = 0u;
     uint32_t vertexCount = 0u;
+    // A live target sampled directly. Its texture is bound when the batch is
+    // flushed, after any queued draws into it.
+    GsSurface *source = nullptr;
+    // Samples its own colour target through a snapshot, which the flush takes
+    // before this batch when `snapshot` is set and otherwise shares with the
+    // batch before it.
+    bool feedback = false;
+    bool snapshot = false;
 
     // Everything except the vertex range; two consecutive primitives with the
-    // same answer here can share one draw call.
+    // same answer here can share one draw call. One that needs a snapshot of
+    // its own starts a new batch.
     bool sameStateAs(const DrawBatch &other) const {
-        return color == other.color && depth == other.depth &&
+        return !other.snapshot && feedback == other.feedback && source == other.source &&
+               color == other.color && depth == other.depth &&
                pipeline == other.pipeline && texture == other.texture &&
                usesBlendConstant == other.usesBlendConstant &&
                blendConstant == other.blendConstant &&
@@ -287,6 +297,38 @@ bool samplesFitSurface(const GSPrimitiveBatch &batch, const GsSurface &surface,
     return fitsU && fitsV;
 }
 
+// The pixels a draw can write: exact for a sprite at scale 1, where the vertex
+// shader's half-pixel shift covers [ceil(x0), ceil(x1)) as samplesFitSurface
+// assumes, and padded like primitiveBounds otherwise.
+GsRegion drawnPixels(const GSPrimitiveBatch &batch, const GsSurface &surface) {
+    const GSContext &context = batch.state.context;
+    if (surface.scale != 1u || batch.state.prim.type != GS_PRIM_SPRITE || batch.vertexCount != 2u)
+        return primitiveBounds(batch);
+    const double offsetX = context.xyoffset.ofx / 16.0, offsetY = context.xyoffset.ofy / 16.0;
+    const double x0 = batch.vertices[0].x - offsetX, x1 = batch.vertices[1].x - offsetX;
+    const double y0 = batch.vertices[0].y - offsetY, y1 = batch.vertices[1].y - offsetY;
+    for (double value : {x0, x1, y0, y1})
+        if (!std::isfinite(value))
+            return primitiveBounds(batch);
+    auto span = [](double a, double b, uint32_t low, uint32_t high, uint32_t &first, uint32_t &end) {
+        first = static_cast<uint32_t>(std::clamp(std::ceil(std::min(a, b)), double(low), double(high)));
+        end = static_cast<uint32_t>(std::clamp(std::ceil(std::max(a, b)), double(low), double(high)));
+    };
+    GsRegion region;
+    span(x0, x1, context.scissor.x0, context.scissor.x1 + 1u, region.x0, region.x1);
+    span(y0, y1, context.scissor.y0, context.scissor.y1 + 1u, region.y0, region.y1);
+    return region;
+}
+
+// The texels a draw can sample from a surface, or all of them when its
+// coordinates cannot be bounded.
+GsRegion sampledTexels(const GSPrimitiveBatch &batch, const GsSurface &surface) {
+    GsRegion taps;
+    if (samplesFitSurface(batch, surface, &taps) && !taps.empty())
+        return taps;
+    return surface.wholeRegion();
+}
+
 struct FeedbackPadding {
     // The column tail and bottom row are separate: their bounding rectangle
     // would include source pixels still owned by the GPU.
@@ -367,9 +409,16 @@ struct SdlGpuBackend::Impl {
     SDL_GPUTransferBuffer *vertexUpload = nullptr;
     uint32_t vertexUploadCapacity = 0u;
     SDL_GPUTexture *dummyTexture = nullptr;
-    SDL_GPUTexture *feedbackTexture = nullptr;
-    uint32_t feedbackWidth = 0u;
-    uint32_t feedbackHeight = 0u;
+    // Snapshot textures, one per size. Copies into them cycle, so each draw
+    // keeps the snapshot it sampled while later ones are taken.
+    struct FeedbackTexture {
+        uint32_t width, height;
+        SDL_GPUTexture *texture;
+    };
+    std::vector<FeedbackTexture> feedbackTextures;
+    // What the feedback batches at the end of the queue have drawn since their
+    // snapshot. A draw that reads none of it can share that snapshot.
+    GsRegion feedbackWritten;
 
     // Set when this backend owns the window. Present() then composes into the
     // swapchain instead of handing pixels back through host memory.
@@ -489,6 +538,14 @@ struct SdlGpuBackend::Impl {
     bool pendingDrawsTouch(const GsPageSet &pages) const {
         for (const DrawBatch &batch : batches) {
             if ((batch.writtenPages & pages).any())
+                return true;
+        }
+        return false;
+    }
+
+    bool pendingDrawsTouchOthers(const GsPageSet &pages, const GsSurface *surface) const {
+        for (const DrawBatch &batch : batches) {
+            if (batch.color != surface && (batch.writtenPages & pages).any())
                 return true;
         }
         return false;
@@ -638,6 +695,52 @@ struct SdlGpuBackend::Impl {
     // Batching
     // -----------------------------------------------------------------
 
+    SDL_GPUTexture *feedbackTextureFor(uint32_t width, uint32_t height, std::string &error) {
+        for (const FeedbackTexture &feedback : feedbackTextures)
+            if (feedback.width == width && feedback.height == height)
+                return feedback.texture;
+        SDL_GPUTextureCreateInfo info{};
+        info.type = SDL_GPU_TEXTURETYPE_2D;
+        info.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+        info.width = width;
+        info.height = height;
+        info.layer_count_or_depth = 1u;
+        info.num_levels = 1u;
+        info.sample_count = SDL_GPU_SAMPLECOUNT_1;
+        info.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
+        SDL_GPUTexture *texture = SDL_CreateGPUTexture(device.handle(), &info);
+        if (!texture) {
+            error = std::string("SDL_CreateGPUTexture(feedback): ") + SDL_GetError();
+            return nullptr;
+        }
+        feedbackTextures.push_back({width, height, texture});
+        return texture;
+    }
+
+    // Copies a surface into its snapshot texture as part of a flush, after
+    // the batches recorded before it.
+    SDL_GPUTexture *recordSnapshot(SDL_GPUCommandBuffer *commands, const GsSurface &surface) {
+        const uint32_t width = surface.width * surface.scale, height = surface.height * surface.scale;
+        std::string error;
+        SDL_GPUTexture *snapshot = feedbackTextureFor(width, height, error);
+        if (!snapshot) {
+            setError(std::move(error));
+            return nullptr;
+        }
+        SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(commands);
+        if (!copy) {
+            setError(std::string("SDL_BeginGPUCopyPass(snapshot): ") + SDL_GetError());
+            return nullptr;
+        }
+        SDL_GPUTextureLocation source{}, destination{};
+        source.texture = surface.texture;
+        destination.texture = snapshot;
+        SDL_CopyGPUTextureToTexture(copy, &source, &destination, width, height, 1u, true);
+        SDL_EndGPUCopyPass(copy);
+        ++stats.feedbackCopies;
+        return snapshot;
+    }
+
     SDL_GPUTexture *snapshotFeedback(GsSurface &surface, std::string &error,
                                      const FeedbackPadding &padding, CommandBuffer &ownedCommands) {
         if (!flushDraws() || !targets->refresh(surface, error))
@@ -690,26 +793,9 @@ struct SdlGpuBackend::Impl {
             }
             SDL_UnmapGPUTransferBuffer(device.handle(), upload.get());
         }
-        if (!feedbackTexture || feedbackWidth != width || feedbackHeight != height) {
-            if (feedbackTexture)
-                SDL_ReleaseGPUTexture(device.handle(), feedbackTexture);
-            SDL_GPUTextureCreateInfo info{};
-            info.type = SDL_GPU_TEXTURETYPE_2D;
-            info.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
-            info.width = width;
-            info.height = height;
-            info.layer_count_or_depth = 1u;
-            info.num_levels = 1u;
-            info.sample_count = SDL_GPU_SAMPLECOUNT_1;
-            info.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
-            feedbackTexture = SDL_CreateGPUTexture(device.handle(), &info);
-            feedbackWidth = width;
-            feedbackHeight = height;
-            if (!feedbackTexture) {
-                error = std::string("SDL_CreateGPUTexture(feedback): ") + SDL_GetError();
-                return nullptr;
-            }
-        }
+        SDL_GPUTexture *feedbackTexture = feedbackTextureFor(width, height, error);
+        if (!feedbackTexture)
+            return nullptr;
         ownedCommands.reset(SDL_AcquireGPUCommandBuffer(device.handle()));
         SDL_GPUCommandBuffer *commands = ownedCommands.get();
         if (!commands) {
@@ -925,21 +1011,33 @@ struct SdlGpuBackend::Impl {
             // writing one attachment in a single draw is undefined.
             SDL_GPUTexture *texture = nullptr;
             GsSurface *sampled = nullptr;
-            if (pendingDrawsTouch(textures->sourcePagesFor(state)) && !flushDraws())
-                return;
-            if (!gsIsIndexedPsm(context.tex0.psm)) {
-                sampled = targets->findSampleSource(context.tex0.tbp0, context.tex0.psm,
-                                                    context.tex0.tbw);
-            }
             FeedbackPadding feedbackPadding;
+            const GsPageSet sourcePages = textures->sourcePagesFor(state);
+            // A live target that owes nothing to local memory needs no flush:
+            // draws queued into it stay ahead of this one within the flush. The
+            // target being drawn into is read through a snapshot taken there.
+            GsSurface *const candidate = gsIsIndexedPsm(context.tex0.psm) ? nullptr
+                : targets->sampleCandidate(context.tex0.tbp0, context.tex0.psm, context.tex0.tbw);
+            const bool inOrder = candidate && candidate->cpuPatches.empty() && candidate->needsUpload.empty() &&
+                                 !pendingDrawsTouchOthers(sourcePages, candidate);
+            const bool readsItself = inOrder && candidate == color &&
+                canSnapshotFeedback(batch, *color, feedbackPadding) &&
+                feedbackPadding.uploads[0].empty() && feedbackPadding.uploads[1].empty();
+            if (inOrder && candidate != color && samplesFitSurface(batch, *candidate)) {
+                sampled = candidate;
+            } else if (!readsItself) {
+                if (pendingDrawsTouch(sourcePages) && !flushDraws())
+                    return;
+                if (!gsIsIndexedPsm(context.tex0.psm)) {
+                    sampled = targets->findSampleSource(context.tex0.tbp0, context.tex0.psm,
+                                                        context.tex0.tbw);
+                }
+            }
             const bool directSample = sampled && sampled != color && samplesFitSurface(batch, *sampled);
             const bool copyFeedback = sampled && !directSample &&
                 canSnapshotFeedback(batch, *sampled, feedbackPadding);
-            if (directSample) {
-                texture = sampled->texture;
-                textureScale = static_cast<float>(sampled->scale);
-                ++stats.texturesFromLiveTargets;
-                // Live targets have not passed through texture-cache TEXA expansion.
+            // Live targets have not passed through texture-cache TEXA expansion.
+            const auto liveTargetTexa = [&] {
                 if (context.tex0.psm == GS_PSM_CT24 || context.tex0.psm == GS_PSM_CT16 ||
                     context.tex0.psm == GS_PSM_CT16S) {
                     draw.fragmentUniforms.misc[2] = context.tex0.psm == GS_PSM_CT24 ? 1.0f : 2.0f;
@@ -947,6 +1045,28 @@ struct SdlGpuBackend::Impl {
                         uint32_t(state.texa.ta0) | (uint32_t(state.texa.ta1) << 8u) |
                         (state.texa.aem ? 0x10000u : 0u));
                 }
+            };
+            if (readsItself) {
+                ++stats.textureFeedbackHazards;
+                texture = feedbackTextureFor(color->width * color->scale, color->height * color->scale, error);
+                if (!texture) {
+                    setError(std::move(error));
+                    return;
+                }
+                // The strips of one blur or channel-shuffle pass mostly read
+                // pixels no earlier strip of the pass has drawn, so they can
+                // share one snapshot, and then one draw call.
+                draw.feedback = true;
+                draw.snapshot = batches.empty() || !batches.back().feedback || batches.back().color != color ||
+                                sampledTexels(batch, *color).intersects(feedbackWritten);
+                textureScale = static_cast<float>(color->scale);
+                liveTargetTexa();
+            } else if (directSample) {
+                texture = sampled->texture;
+                draw.source = sampled;
+                textureScale = static_cast<float>(sampled->scale);
+                ++stats.texturesFromLiveTargets;
+                liveTargetTexa();
             } else if (copyFeedback) {
                 if (sampled == color)
                     ++stats.textureFeedbackHazards;
@@ -959,13 +1079,7 @@ struct SdlGpuBackend::Impl {
                     return;
                 }
                 textureScale = static_cast<float>(sampled->scale);
-                if (context.tex0.psm == GS_PSM_CT24 || context.tex0.psm == GS_PSM_CT16 ||
-                    context.tex0.psm == GS_PSM_CT16S) {
-                    draw.fragmentUniforms.misc[2] = context.tex0.psm == GS_PSM_CT24 ? 1.0f : 2.0f;
-                    draw.fragmentUniforms.misc[3] = static_cast<float>(
-                        uint32_t(state.texa.ta0) | (uint32_t(state.texa.ta1) << 8u) |
-                        (state.texa.aem ? 0x10000u : 0u));
-                }
+                liveTargetTexa();
             } else {
                 if (sampled == color && sampled != nullptr)
                     ++stats.textureFeedbackHazards;
@@ -1061,6 +1175,10 @@ struct SdlGpuBackend::Impl {
             batches.push_back(draw);
             ++stats.batches;
         }
+        if (draw.snapshot)
+            feedbackWritten.clear();
+        if (draw.feedback)
+            feedbackWritten.merge(drawnPixels(batch, *color));
         // Copy and consume the snapshot before another submission can change its source.
         if (feedbackCommands)
             flushDraws(std::move(feedbackCommands));
@@ -1142,6 +1260,9 @@ struct SdlGpuBackend::Impl {
                 batch.color->needsUpload.clear();
             if (batch.color && !targets->refresh(*batch.color, error))
                 return setError(std::move(error));
+            // A sampled target that grew since the batch was queued reloads here too.
+            if (batch.source && !targets->refresh(*batch.source, error))
+                return setError(std::move(error));
         }
 
         if (!ownedCommands)
@@ -1167,6 +1288,13 @@ struct SdlGpuBackend::Impl {
         };
 
         for (const DrawBatch &batch : batches) {
+            SDL_GPUTexture *sampledTexture = batch.source ? batch.source->texture : batch.texture;
+            if (batch.snapshot) {
+                endPass();
+                sampledTexture = recordSnapshot(commands, *batch.color);
+                if (!sampledTexture)
+                    return false;
+            }
             if (!pass || batch.color != activeColor || batch.depth != activeDepth) {
                 endPass();
                 SDL_GPUColorTargetInfo colorInfo{};
@@ -1225,7 +1353,7 @@ struct SdlGpuBackend::Impl {
             }
 
             const SDL_GPUTextureSamplerBinding textureBinding{
-                batch.texture ? batch.texture : dummyTexture, device.sampler()};
+                sampledTexture ? sampledTexture : dummyTexture, device.sampler()};
             SDL_BindGPUFragmentSamplers(pass, 0u, &textureBinding, 1u);
 
             SDL_PushGPUVertexUniformData(commands, 0u, &batch.vertexUniforms,
@@ -2282,8 +2410,8 @@ SdlGpuBackend::~SdlGpuBackend() {
             SDL_ReleaseGPUTransferBuffer(m_impl->device.handle(), m_impl->vertexUpload);
         if (m_impl->dummyTexture)
             SDL_ReleaseGPUTexture(m_impl->device.handle(), m_impl->dummyTexture);
-        if (m_impl->feedbackTexture)
-            SDL_ReleaseGPUTexture(m_impl->device.handle(), m_impl->feedbackTexture);
+        for (const auto &feedback : m_impl->feedbackTextures)
+            SDL_ReleaseGPUTexture(m_impl->device.handle(), feedback.texture);
         if (m_impl->presentUpload)
             SDL_ReleaseGPUTexture(m_impl->device.handle(), m_impl->presentUpload);
         if (m_impl->window) {

@@ -181,6 +181,11 @@ public:
     // resolving it and rebuilding a texture from the result.
     GsSurface *findSampleSource(uint32_t base, uint32_t psm, uint32_t bufferWidth);
 
+    // The first surface findSampleSource would consider, without bringing it
+    // up to date. With no CPU patches or pending upload, it is what that
+    // returns, and finding it changed nothing.
+    GsSurface *sampleCandidate(uint32_t base, uint32_t psm, uint32_t bufferWidth) const;
+
     // Reads a colour surface back at its full scaled resolution, as RGBA8 rows
     // of width*scale pixels. Used by presentation, which wants the scaled
     // image rather than the native-resolution one resolve() produces.
