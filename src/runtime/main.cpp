@@ -182,8 +182,9 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    // The sound drivers from the disc run unmodified on an emulated IOP. The
-    // game's own libsdr and Sound Kit reach them over SIF, as on a console.
+    // The sound drivers from the disc run unmodified on an emulated IOP, and
+    // the game's libsdr and Sound Kit reach them over SIF. Audio output starts
+    // when sceSifLoadModule loads the first of them.
     ps2_native_iop::setModules(runtime, {"LIBSD.IRX", "SDRDRV.IRX", "MODHSYN.IRX", "MODMIDI.IRX",
                                          "MODMSIN.IRX", "SKSOUND.IRX", "SKHSYNTH.IRX", "SKMIDI.IRX",
                                          "SKMSIN.IRX", "PCMPLAY.IRX"});

@@ -127,7 +127,7 @@ stubs = [
     "sceSifInitRpc@0x00119DE0",
     "sceSifGetOtherData@0x0011A2C0",
     "sceSifBindRpc@0x0011A588",
-    # Not from gen_stubs.py, which files it with the syscalls. The guest's own
+    # Added by hand: gen_stubs.py lists it with the syscalls. The game's own
     # version takes packets from a pool that only the (stubbed) sceSifInitRpc
     # sets up, so every call failed before it reached the IOP.
     "sceSifCallRpc@0x0011A768",
