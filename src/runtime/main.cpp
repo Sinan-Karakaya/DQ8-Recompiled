@@ -16,6 +16,7 @@
 
 #include "ps2_runtime.h"
 #include "ps2_recompiled_functions.h"
+#include "runtime/ps2_native_iop.h"
 #include "runtime/gs/gs_frontend.h"
 #include "runtime/gs/gs_threaded_backend.h"
 #include "vu_bounds.h"
@@ -70,6 +71,7 @@ int main(int argc, char **argv)
     std::string cdRoot;
     uint32_t entryPoint = kDefaultEntryPoint;
     bool tracePrintf = false;
+    bool sound = true;
     std::string rasterBackend = "sw";
     uint32_t resolutionScale = 1u;
 
@@ -83,6 +85,10 @@ int main(int argc, char **argv)
         else if (arg == "--trace-printf")
         {
             tracePrintf = true;
+        }
+        else if (arg == "--mute")
+        {
+            sound = false;
         }
         else if (arg.rfind("--gs=", 0) == 0)
         {
@@ -108,6 +114,7 @@ int main(int argc, char **argv)
                         "  --cd-root=DIR    cdrom0: directory (default: the ELF's directory)\n"
                         "  --gs=BACKEND     raster backend: sw (default) or sdlgpu\n"
                         "  --scale=N        internal resolution multiplier for --gs=sdlgpu\n"
+                        "  --mute           run the sound driver without playing anything\n"
                         "  --trace-printf   restore retail debug logging through the guest formatter\n"
                         "                   Set PS2X_DECI2_LOG_LIMIT=0 to remove the log limit.\n",
                         kDefaultEntryPoint);
@@ -174,6 +181,15 @@ int main(int argc, char **argv)
         std::fprintf(stderr, "[dq8] PS2Runtime::initialize() failed\n");
         return 1;
     }
+
+    // The sound drivers from the disc run unmodified on an emulated IOP, and
+    // the game's libsdr and Sound Kit reach them over SIF. Audio output starts
+    // when sceSifLoadModule loads the first of them.
+    ps2_native_iop::setModules(runtime, {"LIBSD.IRX", "SDRDRV.IRX", "MODHSYN.IRX", "MODMIDI.IRX",
+                                         "MODMSIN.IRX", "SKSOUND.IRX", "SKHSYNTH.IRX", "SKMIDI.IRX",
+                                         "SKMSIN.IRX", "PCMPLAY.IRX"});
+    if (!sound)
+        ps2_native_iop::setVolume(0.0f);
 
     // After initialize(), which is what creates GS local memory and hands it to
     // the default software backend. setRasterBackend flushes and carries local

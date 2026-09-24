@@ -101,4 +101,12 @@ if(TARGET ps2_runtime)
     target_link_libraries(dq8-memory-tests PRIVATE ps2_runtime dq8_host_simd)
     add_test(NAME memory COMMAND dq8-memory-tests)
     set_tests_properties(memory PROPERTIES TIMEOUT 60)
+
+    add_executable(dq8-sound-tests
+        sound_main.cpp
+        "${PS2X}/ps2xTest/src/ps2_native_iop_tests.cpp")
+    target_include_directories(dq8-sound-tests PRIVATE "${PS2X}/ps2xTest/include")
+    target_link_libraries(dq8-sound-tests PRIVATE ps2_iop)
+    add_test(NAME sound COMMAND dq8-sound-tests)
+    set_tests_properties(sound PROPERTIES TIMEOUT 60)
 endif()

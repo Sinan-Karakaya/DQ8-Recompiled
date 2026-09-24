@@ -134,7 +134,7 @@ jobs:
             -DPS2X_VU_AOT_COMPILE_JOBS=${{ matrix.aot-jobs }}
           cmake --build build/ci-runtime --target ps2_recomp dq8 dq8-fiber-native \
             dq8-kernel-tests dq8-ee-pacing-tests dq8-vu-tests dq8-vu-math-tests \
-            dq8-vu-bounds-tests dq8-memory-tests dq8-render-cadence-tests
+            dq8-vu-bounds-tests dq8-memory-tests dq8-render-cadence-tests dq8-sound-tests
           if [[ "$RUNNER_OS" == Linux ]]; then
             cmake --build build/ci-runtime --target dq8-fiber-ucontext
           fi
