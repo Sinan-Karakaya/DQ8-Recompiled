@@ -11,7 +11,7 @@ Implements the GS backend with SDL3 GPU. The game selects it with `--gs=sdlgpu`;
 | `sdlgpu_textures` | Texture decoding, caching, and invalidation |
 | `sdlgpu_display` | Display composition and presentation |
 | `sdlgpu_input` | Keyboard and gamepad input |
-| `shaders` | GS drawing, reinterpretation, and display shaders |
+| `shaders` | GS drawing, reinterpretation, 8-bit texture expansion, and display shaders |
 
 See the [graphics guide](https://github.com/Sinan-Karakaya/DQ8-Recompiled/wiki/Graphics)
 for synchronization rules and limitations, and the
