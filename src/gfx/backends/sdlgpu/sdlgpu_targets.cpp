@@ -411,6 +411,32 @@ void GsTargetCache::invalidate(const GsPageSet &pages, bool preserveOwned) {
     }
 }
 
+namespace {
+// Whole CT32 pages at scale 1: each GS page is one 64x32 cell of the surface,
+// so host writes can be patched in and uploads done page by page.
+bool nativeCt32(const GsSurface &surface) {
+    return surface.psm == GS_PSM_CT32 && surface.scale == 1u && (surface.base & 31u) == 0u &&
+           surface.width == surface.bufferWidth * 64u &&
+           surface.pages.count() == surface.bufferWidth * ((surface.height + 31u) / 32u) &&
+           !surface.undefined;
+}
+}
+
+GsSurface *GsTargetCache::nativeOwner(const GsPageSet &pages) {
+    GsSurface *owner = nullptr;
+    for (auto &candidate : m_surfaces) {
+        GsSurface &surface = *candidate;
+        if (surface.depth || surface.gpuDirty.empty() || (surface.ownedPages & pages).none())
+            continue;
+        if (owner)
+            return nullptr;
+        owner = &surface;
+    }
+    if (!owner || !nativeCt32(*owner) || (pages & ~owner->pages).any())
+        return nullptr;
+    return owner;
+}
+
 bool GsTargetCache::canPatchHostWrite(const GsPageSet &pages) const {
     bool owned = false;
     for (const auto &candidate : m_surfaces) {
@@ -418,10 +444,7 @@ bool GsTargetCache::canPatchHostWrite(const GsPageSet &pages) const {
         if (surface.depth || surface.gpuDirty.empty() || (surface.pages & pages).none())
             continue;
         owned = true;
-        if (surface.psm != GS_PSM_CT32 || surface.scale != 1u ||
-            (surface.base & 31u) != 0u || surface.width != surface.bufferWidth * 64u ||
-            surface.pages.count() != surface.bufferWidth * ((surface.height + 31u) / 32u) ||
-            !surface.needsUpload.empty() || surface.undefined)
+        if (!nativeCt32(surface) || !surface.needsUpload.empty())
             return false;
     }
     return owned;

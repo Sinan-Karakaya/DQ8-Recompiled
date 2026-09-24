@@ -8,6 +8,7 @@
 
 #include <SDL3/SDL_gpu.h>
 
+#include <array>
 #include <cstdint>
 #include <string>
 #include <unordered_map>
@@ -137,6 +138,13 @@ public:
                           uint32_t width, uint32_t height, bool destination16,
                           std::string &error);
 
+    // Builds an 8-bit indexed texture from the CT32 target holding its bytes,
+    // through `palette` (256 RGBA8). `pages`: the texture's base page and pages
+    // per row, then the target's; the target must cover every page read.
+    bool expandIndexed8(SDL_GPUTexture *target, const uint32_t *palette, SDL_GPUTexture *destination,
+                        uint32_t width, uint32_t height, const SDL_Rect &region,
+                        const std::array<uint32_t, 4> &pages, std::string &error);
+
     bool composeDisplay(SDL_GPUTexture *circuit1, SDL_GPUTexture *circuit2,
                         SDL_GPUTexture *destination, uint32_t width, uint32_t height,
                         const GsDisplayUniforms &uniforms, SDL_GPUFence *&completed, std::string &error);
@@ -159,8 +167,14 @@ private:
     SDL_GPUSampler *m_sampler = nullptr;
     SDL_GPUTextureFormat m_depthFormat = SDL_GPU_TEXTUREFORMAT_D32_FLOAT;
     bool m_framebufferFetch = false;
+    bool createIndex8(std::string &error);
+
     SDL_GPUGraphicsPipeline *m_reinterpretPipeline = nullptr;
     SDL_GPUGraphicsPipeline *m_displayPipeline = nullptr;
+    SDL_GPUGraphicsPipeline *m_index8Pipeline = nullptr;
+    SDL_GPUTexture *m_index8Palette = nullptr;
+    SDL_GPUTexture *m_index8Placement = nullptr;
+    SDL_GPUTransferBuffer *m_index8Upload = nullptr;
     std::unordered_map<GsPipelineKey, SDL_GPUGraphicsPipeline *, GsPipelineKeyHash> m_pipelines;
 };
 

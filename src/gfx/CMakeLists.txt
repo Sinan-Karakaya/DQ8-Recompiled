@@ -95,6 +95,9 @@ if(DQ8_GFX_SDL_TARGET)
     dq8_add_shader(dq8_gfx_sdlgpu MSL_DECORATION_BINDING
         SOURCE "${CMAKE_CURRENT_LIST_DIR}/backends/sdlgpu/shaders/gs_display.frag"
         STAGE frag SYMBOL kGsDisplayFragSpirv)
+    dq8_add_shader(dq8_gfx_sdlgpu MSL_DECORATION_BINDING
+        SOURCE "${CMAKE_CURRENT_LIST_DIR}/backends/sdlgpu/shaders/gs_index8.frag"
+        STAGE frag SYMBOL kGsIndex8FragSpirv)
     if(APPLE)
         dq8_add_shader(dq8_gfx_sdlgpu FRAMEBUFFER_FETCH
             SOURCE "${CMAKE_CURRENT_LIST_DIR}/backends/sdlgpu/shaders/gs_draw.frag"
