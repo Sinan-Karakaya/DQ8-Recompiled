@@ -28,6 +28,7 @@
 // Declared here rather than in a header so measuring costs no rebuild of the
 // recompiled corpus, which includes those headers.
 extern "C++" {
+extern std::atomic<bool> g_gsFrontendTiming;
 extern std::atomic<uint64_t> g_gsFrontendPacketNanos;
 extern std::atomic<uint64_t> g_gsFrontendPacketCount;
 extern std::atomic<uint64_t> g_gsUploadNativeNanos;
@@ -75,6 +76,18 @@ bool gsScreenshotEnabled() {
         return value != nullptr && *value != '\0';
     }();
     return enabled;
+}
+
+// DQ8_GFX_STATS_EVERY=N prints a counter delta every N presented frames; zero
+// when unset. The timing behind those numbers is only taken when it is set.
+uint32_t statsInterval() {
+    static const uint32_t interval = [] {
+        const char *value = std::getenv("DQ8_GFX_STATS_EVERY");
+        const uint32_t every = value != nullptr ? static_cast<uint32_t>(std::strtoul(value, nullptr, 10)) : 0u;
+        g_gsFrontendTiming.store(every != 0u, std::memory_order_relaxed);
+        return every;
+    }();
+    return interval;
 }
 
 // SDL3 GPU normalises every backend onto a Y-up clip space, so a GS window
@@ -481,12 +494,17 @@ struct SdlGpuBackend::Impl {
     uint64_t backendNanos = 0u;
     std::atomic<uint64_t> displayNanos{0u};
 
+    // Only the stats report reads the total, and two clock reads per command
+    // cost the worker a couple of percent.
     struct ScopedTimer {
         uint64_t &sink;
-        std::chrono::steady_clock::time_point start;
-        explicit ScopedTimer(uint64_t &target)
-            : sink(target), start(std::chrono::steady_clock::now()) {}
+        bool timed = statsInterval() != 0u;
+        std::chrono::steady_clock::time_point start =
+            timed ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{};
+        explicit ScopedTimer(uint64_t &target) : sink(target) {}
         ~ScopedTimer() {
+            if (!timed)
+                return;
             sink += static_cast<uint64_t>(
                 std::chrono::duration_cast<std::chrono::nanoseconds>(
                     std::chrono::steady_clock::now() - start)
@@ -1602,10 +1620,7 @@ struct SdlGpuBackend::Impl {
     // "how many transfers per frame and how long did the frame take" is the
     // question a profile of the whole process answers badly.
     void reportStats() {
-        static const uint32_t interval = [] {
-            const char *value = std::getenv("DQ8_GFX_STATS_EVERY");
-            return value != nullptr ? static_cast<uint32_t>(std::strtoul(value, nullptr, 10)) : 0u;
-        }();
+        const uint32_t interval = statsInterval();
         if (interval == 0u || (stats.presents % interval) != 0u)
             return;
 

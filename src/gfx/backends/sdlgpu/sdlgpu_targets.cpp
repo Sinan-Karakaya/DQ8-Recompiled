@@ -6,6 +6,7 @@
 #include "runtime/gs/ps2_gs_psmct32.h"
 
 #include <algorithm>
+#include <bit>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -357,8 +358,12 @@ void GsTargetCache::markDrawn(GsSurface &surface, const GsRegion &region) {
     gsMarkPages(writtenPages, surface.base, surface.bufferWidth, surface.psm,
                 clipped.width(), clipped.height(), clipped.x0, clipped.y0);
     surface.ownedPages |= writtenPages;
-    for (uint32_t page = 0u; page < kGsPageCount; ++page)
-        if (writtenPages.test(page)) ++m_pageGeneration[page];
+    // A word at a time: this runs for every batch drawn.
+    const GsPageSet lowWord(~0ull);
+    for (uint32_t first = 0u; first < kGsPageCount; first += 64u) {
+        for (uint64_t word = ((writtenPages >> first) & lowWord).to_ullong(); word != 0u; word &= word - 1u)
+            ++m_pageGeneration[first + static_cast<uint32_t>(std::countr_zero(word))];
+    }
     for (auto &candidate : m_surfaces) {
         GsSurface &other = *candidate;
         if (&other != &surface && !other.depth && (other.pages & writtenPages).any())
