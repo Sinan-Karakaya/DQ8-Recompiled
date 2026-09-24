@@ -127,6 +127,10 @@ stubs = [
     "sceSifInitRpc@0x00119DE0",
     "sceSifGetOtherData@0x0011A2C0",
     "sceSifBindRpc@0x0011A588",
+    # Not from gen_stubs.py, which files it with the syscalls. The guest's own
+    # version takes packets from a pool that only the (stubbed) sceSifInitRpc
+    # sets up, so every call failed before it reached the IOP.
+    "sceSifCallRpc@0x0011A768",
     "sceSifCheckStatRpc@0x0011A968",
     "sceSifSetRpcQueue@0x0011A9A8",
     "sceSifRegisterRpc@0x0011AA40",
@@ -157,9 +161,6 @@ stubs = [
     "sceSifIsAliveIop@0x0011FED8",
     "sceSifSyncIop@0x0011FF00",
     "sceSifRebootIop@0x0011FF50",
-    "sceSdRemoteInit@0x00122B10",
-    "sceSdTransToIOP@0x00122BC0",
-    "sceSdRemote@0x00122C68",
     "__ieee754_rem_pio2f@0x00126468",
     "__kernel_cosf@0x00127EB0",
     "__kernel_sinf@0x00128868",
