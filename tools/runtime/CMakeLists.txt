@@ -63,7 +63,8 @@ if(TARGET ps2_runtime)
         vu_main.cpp
         "${PS2X}/ps2xTest/src/test_function_table.cpp"
         "${PS2X}/ps2xTest/src/ps2_vu1_tests.cpp"
-        "${PS2X}/ps2xTest/src/ps2_vu1_upper_engine_tests.cpp")
+        "${PS2X}/ps2xTest/src/ps2_vu1_upper_engine_tests.cpp"
+        "${PS2X}/ps2xTest/src/ps2_vu1_program_tests.cpp")
     target_include_directories(dq8-vu-tests PRIVATE "${PS2X}/ps2xTest/include")
     target_link_libraries(dq8-vu-tests PRIVATE ps2_runtime dq8_host_simd)
     add_test(NAME vu COMMAND dq8-vu-tests)

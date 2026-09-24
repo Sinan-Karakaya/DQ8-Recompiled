@@ -36,7 +36,7 @@ jobs:
           python3 -m unittest discover -s tools/tests -v
           python3 -m unittest discover -s tools/mvi -p 'test_*.py' -v
           python3 tools/oracle/logdiff.py --self-test
-          python3 -m unittest discover -s thirdparty/PS2Recomp/tools/tests -p test_compile_vu_blocks.py -v
+          python3 -m unittest discover -s thirdparty/PS2Recomp/tools/tests -p 'test_compile_vu_*.py' -v
 
       - name: Build and run launcher stub
         if: github.event.repository.private
@@ -124,12 +124,14 @@ jobs:
             trap 'kill "$monitor_pid" 2>/dev/null || true' EXIT
           fi
           profiles=$(python3 -c 'from pathlib import Path; print(";".join(str(p.resolve()) for p in sorted(Path("thirdparty/PS2Recomp/ps2xTest/data").glob("vu_*.vublocks"))))')
+          python3 thirdparty/PS2Recomp/ps2xTest/data/vu_programs.py "$RUNNER_TEMP/vu-programs"
           cmake -S . -B build/ci-runtime -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DDQ8_BUILD_PS2RECOMP=ON -DDQ8_LINK_GENERATED=OFF \
             -DDQ8_GENERATED_DIR="$RUNNER_TEMP/no-game-corpus" -DDQ8_GFX_ENABLE_SDLGPU=OFF \
             -DPS2X_BUILD_RECOMP=ON -DPS2X_BUILD_RUNTIME=ON -DPS2X_BUILD_ANALYZER=OFF \
             -DPS2X_ENABLE_DEBUG_UI=OFF -DPS2X_ENABLE_FFMPEG=ON -DPS2X_ENABLE_SCCACHE=OFF \
             -DGLFW_BUILD_WAYLAND=OFF -DPS2X_VU_AOT_IMAGES="$profiles" \
+            -DPS2X_VU_PROGRAM_PROFILES="$RUNNER_TEMP/vu-programs" \
             -DPS2X_VU_AOT_SHARDS=${{ matrix.aot-shards }} \
             -DPS2X_VU_AOT_COMPILE_JOBS=${{ matrix.aot-jobs }}
           cmake --build build/ci-runtime --target ps2_recomp dq8 dq8-fiber-native \
@@ -148,6 +150,8 @@ jobs:
           PS2_VU_REQUIRE_NATURAL_LOOPS: '1'
           PS2_VU_REQUIRE_BRANCH_TAILS: '1'
           PS2_VU_REQUIRE_DIV_LOOPS: '1'
+          PS2_VU_PROGRAM_FIXTURES: ${{ runner.temp }}/vu-programs
+          PS2_VU_REQUIRE_PROGRAMS: '1'
         run: |
           ./build/ci-runtime/src/runtime/dq8
           ctest --test-dir build/ci-runtime/tools/runtime --no-tests=error \

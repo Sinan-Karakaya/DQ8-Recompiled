@@ -100,6 +100,14 @@ bool verifyBoundaries(const std::vector<uint8_t> &code, const std::vector<uint8_
     };
     reset(reference);
     run(reference, 65536u);
+    // Whole compiled programs only start with a wide budget; the sliced runs
+    // below never give them one.
+    reset(compiled);
+    run(compiled, 65536u);
+    if (!equal()) {
+        std::fprintf(stderr, "Wide-budget execution differs\n");
+        return false;
+    }
     const uint64_t endCycle = reference.vu.state().cycles;
     const VU1State finalState = reference.vu.state();
     const std::vector<uint8_t> finalData(reference.data, reference.data + data.size());
