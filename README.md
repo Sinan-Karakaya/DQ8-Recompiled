@@ -7,9 +7,9 @@ implements the PS2 services it uses. Graphics use SDL3 GPU or a software referen
 renderer.
 
 **This is a development project, not a finished port.** The NTSC-U version
-(`SLUS_212.07`) boots, loads saves, and reaches field gameplay. Sustained playable
-performance, sound, and full-game compatibility are still in progress. The PAL
-configuration is incomplete.
+(`SLUS_212.07`) boots, loads saves, and reaches field gameplay, with sound from
+the game's own drivers. Sustained playable performance and full-game
+compatibility are still in progress. The PAL configuration is incomplete.
 
 ## Getting started
 

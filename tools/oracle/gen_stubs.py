@@ -22,6 +22,10 @@ DO_NOT_STUB = {
     "malloc_extend_top": "newlib arena growth; the runtime's version always fails",
     "__malloc_lock": "guest semaphore, created by supplement_crt0",
     "__malloc_unlock": "pairs with __malloc_lock",
+    # SDRDRV runs natively, and the Sound Kit rides on these too.
+    "sceSdRemoteInit": "libsdr binds the native SDRDRV over SIF",
+    "sceSdRemote": "libsdr packs its own RPCs; SK commands depend on it",
+    "sceSdTransToIOP": "plain SIF DMA into IOP memory",
 }
 
 
