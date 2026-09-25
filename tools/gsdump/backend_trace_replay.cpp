@@ -203,6 +203,15 @@ int main(int argc, char **argv) try {
     std::printf("records=%llu draws=%llu frames=%llu backend-seconds=%.3f\n",
         static_cast<unsigned long long>(records), static_cast<unsigned long long>(draws),
         static_cast<unsigned long long>(frames), seconds);
+    // Everything the backend holds, brought back to local memory. Two changes
+    // to the backend that should not alter results can be compared by this
+    // even where the presented frames never show the difference.
+    std::vector<uint8_t> final;
+    backend->SnapshotVram(final);
+    uint64_t hash = 14695981039346656037ull;
+    for (const uint8_t byte : final)
+        hash = (hash ^ byte) * 1099511628211ull;
+    std::printf("vram-hash=%016llx\n", static_cast<unsigned long long>(hash));
     if (gpu) {
         const auto s = gpu->stats();
         std::printf("resolves=%llu resolved-pixels=%llu refreshes=%llu draws=%llu passes=%llu feedback-copies=%llu\n",

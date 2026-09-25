@@ -5,6 +5,7 @@
 #include "runtime/gs/ps2_gs_memory.h"
 
 #include <algorithm>
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -323,6 +324,33 @@ SDL_GPUTexture *GsTextureCache::acquire(const GSDrawState &state, std::string &e
 // its row through the CT32 layout and shifts the index out of each word. The
 // per-pixel path below remains for every other PSM; it is correct for all of
 // them and none of them is hot on this game.
+void GsTextureCache::buildPalette(const GsTextureKey &key) {
+    const TexaState texa = unpackTexa(key.texa);
+    const uint32_t clutWidth = std::max<uint32_t>(key.texclut & 0xffu, 1u);
+    const uint32_t clutOriginU = (key.texclut >> 8u) & 0xffu;
+    const uint32_t clutOriginV = (key.texclut >> 16u) & 0xffffu;
+    const uint32_t psm = key.psm & 0x3fu;
+    const bool fourBit = psm == GS_PSM_T4 || psm == GS_PSM_T4HL || psm == GS_PSM_T4HH;
+    m_clutRgba.resize(fourBit ? 16u : 256u);
+    for (uint32_t raw = 0u; raw < m_clutRgba.size(); ++raw) {
+        const uint32_t clutIndex = resolveClutIndex(raw, key.cpsm, key.csm, key.csa, key.psm);
+        const uint32_t clutX = clutOriginU + (clutIndex & 0x0fu);
+        const uint32_t clutY = clutOriginV + (clutIndex >> 4u);
+        const uint32_t entryValue = m_vram.read(key.cpsm, key.cbp, clutWidth, clutX, clutY);
+        uint32_t color = 0u;
+        switch (key.cpsm & 0x3fu) {
+        case GS_PSM_CT16:
+        case GS_PSM_CT16S:
+            color = applyTexa(texa, key.cpsm, rgba5551To8888(entryValue));
+            break;
+        default:
+            color = applyTexa(texa, key.cpsm, entryValue);
+            break;
+        }
+        m_clutRgba[raw] = color;
+    }
+}
+
 uint64_t GsTextureCache::expand(const GsTextureKey &key, const GsRegion &region) {
     const TexaState texa = unpackTexa(key.texa);
     const uint32_t clutWidth = std::max<uint32_t>(key.texclut & 0xffu, 1u);
@@ -337,32 +365,11 @@ uint64_t GsTextureCache::expand(const GsTextureKey &key, const GsRegion &region)
     uint64_t texelHash =
         hashStep(hashStep(hashStep(kHashSeed, key.width), key.height), key.psm);
 
-    if (indexed) {
-        // The palette resolved to final RGBA once per expand, so the texel
-        // loop is a load and a store. A per-pixel swizzled palette read here
-        // was the single most expensive thing in the old loop.
-        const bool fourBit = psm == GS_PSM_T4 || psm == GS_PSM_T4HL || psm == GS_PSM_T4HH;
-        m_clutRgba.resize(fourBit ? 16u : 256u);
-        for (uint32_t raw = 0u; raw < m_clutRgba.size(); ++raw) {
-            const uint32_t clutIndex =
-                resolveClutIndex(raw, key.cpsm, key.csm, key.csa, key.psm);
-            const uint32_t clutX = clutOriginU + (clutIndex & 0x0fu);
-            const uint32_t clutY = clutOriginV + (clutIndex >> 4u);
-            const uint32_t entryValue =
-                m_vram.read(key.cpsm, key.cbp, clutWidth, clutX, clutY);
-            uint32_t color = 0u;
-            switch (key.cpsm & 0x3fu) {
-            case GS_PSM_CT16:
-            case GS_PSM_CT16S:
-                color = applyTexa(texa, key.cpsm, rgba5551To8888(entryValue));
-                break;
-            default:
-                color = applyTexa(texa, key.cpsm, entryValue);
-                break;
-            }
-            m_clutRgba[raw] = color;
-        }
-    }
+    // The palette resolved to final RGBA once per expand, so the texel loop is
+    // a load and a store. A per-pixel swizzled palette read here was the
+    // single most expensive thing in the old loop.
+    if (indexed)
+        buildPalette(key);
 
     const bool rowIsWords = psm == GS_PSM_CT32 || psm == GS_PSM_Z32 ||
                             psm == GS_PSM_T8H || psm == GS_PSM_T4HL || psm == GS_PSM_T4HH;
@@ -663,28 +670,123 @@ bool GsTextureCache::resolveSource(const GsTextureKey &key, const GsRegion &regi
         gsMarkPages(pages, key.tbp0, key.tbw, key.psm,
                     region.width(), region.height(), region.x0, region.y0);
     }
-    if (gsIsIndexedPsm(key.psm)) {
-        if (key.cpsm == GS_PSM_CT32 || key.cpsm == GS_PSM_CT24) {
-            const bool fourBit = key.psm == GS_PSM_T4 || key.psm == GS_PSM_T4HL || key.psm == GS_PSM_T4HH;
-            const uint32_t count = fourBit ? 16u : 256u;
-            const uint32_t bw = std::max<uint32_t>(key.texclut & 0xffu, 1u);
-            for (uint32_t i = 0u; i < count; ++i) {
-                const uint32_t index = resolveClutIndex(i, key.cpsm, key.csm, key.csa, key.psm);
-                const uint32_t x = ((key.texclut >> 8u) & 0xffu) + (index & 15u);
-                const uint32_t y = (key.texclut >> 16u) + (index >> 4u);
-                m_targets.markReadPagesCt32(pages, key.cbp, bw, {x, y, x + 1u, y + 1u});
-            }
-        } else {
-            markClutPages(key, pages);
-        }
-    }
+    markClutReads(key, pages);
     return m_targets.resolve(pages, error);
+}
+
+void GsTextureCache::markClutReads(const GsTextureKey &key, GsPageSet &pages) const {
+    if (!gsIsIndexedPsm(key.psm))
+        return;
+    if (key.cpsm != GS_PSM_CT32 && key.cpsm != GS_PSM_CT24) {
+        markClutPages(key, pages);
+        return;
+    }
+    // Palette words the CPU wrote itself are already right in local memory.
+    const bool fourBit = key.psm == GS_PSM_T4 || key.psm == GS_PSM_T4HL || key.psm == GS_PSM_T4HH;
+    const uint32_t count = fourBit ? 16u : 256u;
+    const uint32_t bw = std::max<uint32_t>(key.texclut & 0xffu, 1u);
+    for (uint32_t i = 0u; i < count; ++i) {
+        const uint32_t index = resolveClutIndex(i, key.cpsm, key.csm, key.csa, key.psm);
+        const uint32_t x = ((key.texclut >> 8u) & 0xffu) + (index & 15u);
+        const uint32_t y = (key.texclut >> 16u) + (index >> 4u);
+        m_targets.markReadPagesCt32(pages, key.cbp, bw, {x, y, x + 1u, y + 1u});
+    }
+}
+
+bool GsTextureCache::expandFromTarget(const GsTextureKey &key, Entry &entry, GsRegion region,
+                                      bool &handled, std::string &error) {
+    handled = false;
+    if ((key.psm & 0x3fu) != GS_PSM_T8 || (key.tbp0 & 31u) != 0u)
+        return true;
+    GsPageSet texelPages;
+    markTexelPages(key, texelPages);
+    GsSurface *target = m_targets.nativeOwner(texelPages);
+    if (!target)
+        return true;
+
+    // The palette is still read on the CPU; only the texels come from the target.
+    GsPageSet clutPages;
+    markClutReads(key, clutPages);
+    if (!m_targets.resolve(clutPages, error) || !m_targets.refresh(*target, error))
+        return false;
+    buildPalette(key);
+
+    if (!entry.renderable) {
+        SDL_GPUTextureCreateInfo info{};
+        info.type = SDL_GPU_TEXTURETYPE_2D;
+        info.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+        info.width = key.width;
+        info.height = key.height;
+        info.layer_count_or_depth = 1u;
+        info.num_levels = 1u;
+        info.sample_count = SDL_GPU_SAMPLECOUNT_1;
+        info.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER | SDL_GPU_TEXTUREUSAGE_COLOR_TARGET;
+        SDL_GPUTexture *texture = SDL_CreateGPUTexture(m_device.handle(), &info);
+        if (!texture) {
+            error = std::string("SDL_CreateGPUTexture(indexed from target): ") + SDL_GetError();
+            return false;
+        }
+        if (entry.texture)
+            SDL_ReleaseGPUTexture(m_device.handle(), entry.texture);
+        entry.texture = texture;
+        entry.renderable = true;
+        region = {0u, 0u, key.width, key.height};
+    }
+
+    const SDL_Rect rect{int(region.x0), int(region.y0), int(region.width()), int(region.height())};
+    const std::array<uint32_t, 4> pages{key.tbp0 >> 5u, std::max<uint32_t>(key.tbw >> 1u, 1u),
+                                        target->base >> 5u, target->bufferWidth};
+    if (!m_device.expandIndexed8(target->texture, m_clutRgba.data(), entry.texture, key.width,
+                                 key.height, rect, pages, error))
+        return false;
+    ++m_stats.expandedFromTargets;
+    handled = true;
+    checkAgainstCpu(key, entry, region);
+    return true;
+}
+
+// DQ8_GFX_CHECK_GPU_TEXTURES=1 rebuilds every texture expandFromTarget made
+// the old way, reading the target back, and reports texels that differ. It
+// stalls on every readback, so it is for checking changes, not for play.
+void GsTextureCache::checkAgainstCpu(const GsTextureKey &key, Entry &entry, const GsRegion &region) {
+    static const bool enabled = std::getenv("DQ8_GFX_CHECK_GPU_TEXTURES") != nullptr;
+    if (!enabled)
+        return;
+    std::vector<uint8_t> gpu;
+    std::string error;
+    if (!m_device.downloadTexture(entry.texture, key.width, key.height, gpu, error) ||
+        !resolveSource(key, region, error)) {
+        std::fprintf(stderr, "[texture-check] %s\n", error.c_str());
+        return;
+    }
+    expand(key, region);
+    uint64_t differing = 0u;
+    for (uint32_t y = region.y0; y < region.y1; ++y)
+        for (uint32_t x = region.x0; x < region.x1; ++x)
+            differing += std::memcmp(gpu.data() + (size_t(y) * key.width + x) * 4u,
+                                     m_staging.data() + (size_t(y - region.y0) * region.width() + (x - region.x0)) * 4u,
+                                     4u) != 0;
+    std::fprintf(stderr, "[texture-check] tbp=%05x %ux%u from target: %llu of %llu texels differ\n", key.tbp0,
+                 key.width, key.height, static_cast<unsigned long long>(differing),
+                 static_cast<unsigned long long>(region.width()) * region.height());
 }
 
 bool GsTextureCache::update(const GsTextureKey &key, Entry &entry, std::string &error) {
     const GsRegion region = entry.dirty;
     if (region.empty() || !entry.texture)
         return true;
+
+    bool expanded = false;
+    if (!expandFromTarget(key, entry, region, expanded, error))
+        return false;
+    if (expanded) {
+        entry.identity.texels = 0u;
+        entry.clutUploadPending = false;
+        entry.dirty.clear();
+        ++m_stats.partialUpdates;
+        m_stats.texelsUpdated += static_cast<uint64_t>(region.width()) * region.height();
+        return true;
+    }
 
     if (!resolveSource(key, region, error)) {
         return false;
@@ -734,6 +836,17 @@ bool GsTextureCache::build(const GsTextureKey &key, Entry &entry, std::string &e
     markSourcePages(key, sourcePages);
     if (m_targets.ownsAny(sourcePages))
         ++m_stats.renderTargetSources;
+
+    bool expanded = false;
+    if (!expandFromTarget(key, entry, {0u, 0u, key.width, key.height}, expanded, error))
+        return false;
+    if (expanded) {
+        entry.identity = {};
+        entry.identity.clut = hashClutWindow(key);
+        ++m_stats.builds;
+        return true;
+    }
+
     if (!resolveSource(key, {0u, 0u, key.width, key.height}, error)) {
         return false;
     }

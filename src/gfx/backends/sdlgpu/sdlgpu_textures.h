@@ -76,6 +76,8 @@ struct GsTextureCacheStats {
     // Textures sourced from a region a render target owns. Correct, but the
     // resolve costs the extra detail a scaled target holds.
     uint64_t renderTargetSources = 0u;
+    // Of those, 8-bit indexed ones built on the GPU from the target itself.
+    uint64_t expandedFromTargets = 0u;
 
     double hitRate() const {
         return lookups == 0u ? 0.0
@@ -145,10 +147,22 @@ private:
         // change (it hashes indices), so this is what stops an unchanged-
         // indices texture from skipping an upload it needs.
         bool clutUploadPending = false;
+        // Created as a colour target too, so it can be built on the GPU.
+        bool renderable = false;
     };
 
     bool build(const GsTextureKey &key, Entry &entry, std::string &error);
     bool resolveSource(const GsTextureKey &key, const GsRegion &region, std::string &error);
+    // Pages a palette read needs current in local memory.
+    void markClutReads(const GsTextureKey &key, GsPageSet &pages) const;
+    // An 8-bit indexed texture whose texels a native CT32 target holds is
+    // built on the GPU from that target rather than read back; `handled`
+    // stays false when the texture is not one of those.
+    bool expandFromTarget(const GsTextureKey &key, Entry &entry, GsRegion region, bool &handled,
+                          std::string &error);
+    // Fills m_clutRgba with the texture's palette as final RGBA.
+    void buildPalette(const GsTextureKey &key);
+    void checkAgainstCpu(const GsTextureKey &key, Entry &entry, const GsRegion &region);
     // Re-expands and re-uploads only `entry.dirty`.
     bool update(const GsTextureKey &key, Entry &entry, std::string &error);
     // Re-hashes the palette window after a write to a palette page, and

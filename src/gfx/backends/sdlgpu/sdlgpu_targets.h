@@ -143,6 +143,10 @@ public:
 
     // CT32 uploads can patch resident native targets across pitch changes.
     bool canPatchHostWrite(const GsPageSet &pages) const;
+    // The one surface holding GPU-drawn content in these pages, when it is
+    // native CT32 and covers all of them; null otherwise. After refresh() its
+    // texture is the current content of every one of those pages.
+    GsSurface *nativeOwner(const GsPageSet &pages);
     void patchHostWrite(const GsPageSet &pages, uint32_t base, uint32_t bw,
                         uint32_t x, uint32_t y, uint32_t width,
                         uint32_t firstPixel, uint32_t endPixel);
@@ -180,6 +184,11 @@ public:
     // to date here rather than being rejected, since a partial upload beats
     // resolving it and rebuilding a texture from the result.
     GsSurface *findSampleSource(uint32_t base, uint32_t psm, uint32_t bufferWidth);
+
+    // The first surface findSampleSource would consider, without bringing it
+    // up to date. With no CPU patches or pending upload, it is what that
+    // returns, and finding it changed nothing.
+    GsSurface *sampleCandidate(uint32_t base, uint32_t psm, uint32_t bufferWidth) const;
 
     // Reads a colour surface back at its full scaled resolution, as RGBA8 rows
     // of width*scale pixels. Used by presentation, which wants the scaled

@@ -6,6 +6,7 @@
 #include "runtime/gs/ps2_gs_psmct32.h"
 
 #include <algorithm>
+#include <bit>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -273,18 +274,26 @@ GsSurface *GsTargetCache::findColorSurface(uint32_t base, uint32_t psm) const {
     return nullptr;
 }
 
+namespace {
+bool sampleCompatible(const GsSurface &surface, uint32_t base, uint32_t psm, uint32_t bufferWidth) {
+    const bool compatible = surface.psm == psm || (surface.psm == GS_PSM_CT32 && psm == GS_PSM_CT24);
+    return !surface.depth && surface.base == base && compatible &&
+           surface.bufferWidth == std::max<uint32_t>(bufferWidth, 1u) && !surface.undefined;
+}
+}
+
+GsSurface *GsTargetCache::sampleCandidate(uint32_t base, uint32_t psm, uint32_t bufferWidth) const {
+    for (const auto &candidate : m_surfaces)
+        if (sampleCompatible(*candidate, base, psm, bufferWidth))
+            return candidate.get();
+    return nullptr;
+}
+
 GsSurface *GsTargetCache::findSampleSource(uint32_t base, uint32_t psm,
                                            uint32_t bufferWidth) {
-    bufferWidth = std::max<uint32_t>(bufferWidth, 1u);
     for (const auto &candidate : m_surfaces) {
         GsSurface &surface = *candidate;
-        const bool compatible = surface.psm == psm ||
-            (surface.psm == GS_PSM_CT32 && psm == GS_PSM_CT24);
-        if (surface.depth || surface.base != base || !compatible)
-            continue;
-        if (surface.bufferWidth != bufferWidth)
-            continue;
-        if (surface.undefined)
+        if (!sampleCompatible(surface, base, psm, bufferWidth))
             continue;
 
         // Native CT32 can upload exact CPU patches alongside owned GPU pages.
@@ -349,8 +358,12 @@ void GsTargetCache::markDrawn(GsSurface &surface, const GsRegion &region) {
     gsMarkPages(writtenPages, surface.base, surface.bufferWidth, surface.psm,
                 clipped.width(), clipped.height(), clipped.x0, clipped.y0);
     surface.ownedPages |= writtenPages;
-    for (uint32_t page = 0u; page < kGsPageCount; ++page)
-        if (writtenPages.test(page)) ++m_pageGeneration[page];
+    // A word at a time: this runs for every batch drawn.
+    const GsPageSet lowWord(~0ull);
+    for (uint32_t first = 0u; first < kGsPageCount; first += 64u) {
+        for (uint64_t word = ((writtenPages >> first) & lowWord).to_ullong(); word != 0u; word &= word - 1u)
+            ++m_pageGeneration[first + static_cast<uint32_t>(std::countr_zero(word))];
+    }
     for (auto &candidate : m_surfaces) {
         GsSurface &other = *candidate;
         if (&other != &surface && !other.depth && (other.pages & writtenPages).any())
@@ -403,6 +416,32 @@ void GsTargetCache::invalidate(const GsPageSet &pages, bool preserveOwned) {
     }
 }
 
+namespace {
+// Whole CT32 pages at scale 1: each GS page is one 64x32 cell of the surface,
+// so host writes can be patched in and uploads done page by page.
+bool nativeCt32(const GsSurface &surface) {
+    return surface.psm == GS_PSM_CT32 && surface.scale == 1u && (surface.base & 31u) == 0u &&
+           surface.width == surface.bufferWidth * 64u &&
+           surface.pages.count() == surface.bufferWidth * ((surface.height + 31u) / 32u) &&
+           !surface.undefined;
+}
+}
+
+GsSurface *GsTargetCache::nativeOwner(const GsPageSet &pages) {
+    GsSurface *owner = nullptr;
+    for (auto &candidate : m_surfaces) {
+        GsSurface &surface = *candidate;
+        if (surface.depth || surface.gpuDirty.empty() || (surface.ownedPages & pages).none())
+            continue;
+        if (owner)
+            return nullptr;
+        owner = &surface;
+    }
+    if (!owner || !nativeCt32(*owner) || (pages & ~owner->pages).any())
+        return nullptr;
+    return owner;
+}
+
 bool GsTargetCache::canPatchHostWrite(const GsPageSet &pages) const {
     bool owned = false;
     for (const auto &candidate : m_surfaces) {
@@ -410,10 +449,7 @@ bool GsTargetCache::canPatchHostWrite(const GsPageSet &pages) const {
         if (surface.depth || surface.gpuDirty.empty() || (surface.pages & pages).none())
             continue;
         owned = true;
-        if (surface.psm != GS_PSM_CT32 || surface.scale != 1u ||
-            (surface.base & 31u) != 0u || surface.width != surface.bufferWidth * 64u ||
-            surface.pages.count() != surface.bufferWidth * ((surface.height + 31u) / 32u) ||
-            !surface.needsUpload.empty() || surface.undefined)
+        if (!nativeCt32(surface) || !surface.needsUpload.empty())
             return false;
     }
     return owned;
