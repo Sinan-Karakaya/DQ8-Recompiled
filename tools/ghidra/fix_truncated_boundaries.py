@@ -355,8 +355,11 @@ def main(argv: list[str] | None = None) -> int:
         for row in rows:
             for key in ("_start", "_end"):
                 row.pop(key, None)
+        # The main map uses CRLF and the overlay maps LF; keep whichever it has.
+        with args.csv.open("rb") as handle:
+            ending = "\r\n" if handle.readline().endswith(b"\r\n") else "\n"
         with args.csv.open("w", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer = csv.DictWriter(handle, fieldnames=fields, lineterminator=ending)
             writer.writeheader()
             writer.writerows(rows)
         print(f"rewrote {args.csv}")
