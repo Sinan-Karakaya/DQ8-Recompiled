@@ -91,6 +91,19 @@ def read_map(path: Path):
     return rows, fields
 
 
+def write_map(path: Path, rows, fields) -> None:
+    # The main map uses CRLF and the overlay maps LF; keep whichever it has.
+    with path.open("rb") as handle:
+        ending = "\r\n" if handle.readline().endswith(b"\r\n") else "\n"
+    for row in rows:
+        row.pop("_start", None)
+        row.pop("_end", None)
+    with path.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fields, lineterminator=ending)
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def covered_by(rows, starts, addr: int) -> dict | None:
     index = bisect_right(starts, addr) - 1
     if index < 0:
@@ -258,14 +271,7 @@ def main(argv: list[str] | None = None) -> int:
               f"{len(rejected)} stretch(es) left as data")
 
         if args.in_place and added:
-            merged = sorted(rows + added, key=lambda r: r["_start"])
-            for row in merged:
-                row.pop("_start", None)
-                row.pop("_end", None)
-            with args.csv.open("w", newline="") as handle:
-                writer = csv.DictWriter(handle, fieldnames=fields)
-                writer.writeheader()
-                writer.writerows(merged)
+            write_map(args.csv, sorted(rows + added, key=lambda r: r["_start"]), fields)
             print(f"rewrote {args.csv}")
         return 0
 
@@ -326,14 +332,7 @@ def main(argv: list[str] | None = None) -> int:
           f"{len(unbounded)} unbounded")
 
     if args.in_place and added:
-        merged = sorted(rows + added, key=lambda r: r["_start"])
-        for row in merged:
-            row.pop("_start", None)
-            row.pop("_end", None)
-        with args.csv.open("w", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=fields)
-            writer.writeheader()
-            writer.writerows(merged)
+        write_map(args.csv, sorted(rows + added, key=lambda r: r["_start"]), fields)
         print(f"rewrote {args.csv}")
 
     return 0
