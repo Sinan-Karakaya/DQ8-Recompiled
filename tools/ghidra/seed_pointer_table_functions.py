@@ -44,6 +44,7 @@ from pathlib import Path
 PT_LOAD = 1
 PF_X = 0x1
 JR_RA = 0x03E00008
+JR_MASK, JR = 0xFC1FFFFF, 0x00000008
 MAX_FUNCTION_BYTES = 0x4000
 
 
@@ -140,7 +141,7 @@ def detect_tables(word, executable, rows, minimum_entries: int):
 def carve(word, start: int, hard_limit: int) -> int | None:
     """Return the end address of the function at `start`, or None if unbounded.
 
-    Two terminators, both followed by their delay slot:
+    Three terminators, all followed by their delay slot:
 
     - `jr $ra`, the ordinary return.
     - a `j` whose target lies outside [start, hard_limit) -- a tail call.
@@ -149,6 +150,10 @@ def carve(word, start: int, hard_limit: int) -> int | None:
       return at all. The out-of-range test is what separates those from a
       `j` used as a loop back-edge or a local jump, which must not end the
       function.
+    - a `jr` through any other register with only padding after it up to
+      hard_limit -- a tail call through a pointer, like the vtable thunks
+      that load a method into `$t9` and `jr $t9`. Anywhere else the same
+      instruction is a switch's jump-table dispatch and the function goes on.
     """
     addr = start
     while addr < hard_limit and addr - start < MAX_FUNCTION_BYTES:
@@ -156,6 +161,8 @@ def carve(word, start: int, hard_limit: int) -> int | None:
         if raw is None:
             return None
         if raw == JR_RA:
+            return addr + 8
+        if (raw & JR_MASK) == JR and all(word(a) == 0 for a in range(addr + 8, hard_limit, 4)):
             return addr + 8
         if (raw >> 26) == 0x02:  # J
             target = (addr & 0xF0000000) | ((raw & 0x03FFFFFF) << 2)
@@ -325,7 +332,7 @@ def main(argv: list[str] | None = None) -> int:
     for row in added:
         print(f"{row['Name']:24} {row['Start']} - {row['End']}  ({row['Size']} bytes)")
     for target in unbounded:
-        print(f"warning: 0x{target:08X}: no `jr $ra` before the next boundary; skipped",
+        print(f"warning: 0x{target:08X}: no return or tail call before the next boundary; skipped",
               file=sys.stderr)
 
     print(f"\n{len(added)} function(s) added, {skipped} already mapped, "
