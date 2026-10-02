@@ -2237,9 +2237,10 @@ struct SdlGpuBackend::Impl {
         if (seconds < 2.0)
             return;
         char title[128];
+        double renders = -1.0;
         if (completedRenderCounter) {
             const uint64_t completed = completedRenderCounter();
-            const double renders = completed >= titleCompletedStart
+            renders = completed >= titleCompletedStart
                 ? (completed - titleCompletedStart) / seconds : 0.0;
             std::snprintf(title, sizeof(title), "DQ8Recomp | %.1f render FPS | SDL GPU %.1f presents/s",
                           renders, titlePresents / seconds);
@@ -2249,8 +2250,13 @@ struct SdlGpuBackend::Impl {
                           titlePresents / seconds, titleActiveFrames / seconds);
         }
         SDL_SetWindowTitle(window, title);
-        std::fprintf(stderr, "[present] %.2f fps, %.2f GS-active/s over %.3f s\n",
-                     titlePresents / seconds, titleActiveFrames / seconds, seconds);
+        if (renders >= 0.0) {
+            std::fprintf(stderr, "[present] %.2f fps, %.2f GS-active/s, %.2f renders/s over %.3f s\n",
+                         titlePresents / seconds, titleActiveFrames / seconds, renders, seconds);
+        } else {
+            std::fprintf(stderr, "[present] %.2f fps, %.2f GS-active/s over %.3f s\n",
+                         titlePresents / seconds, titleActiveFrames / seconds, seconds);
+        }
         titleSampleStart = now;
         titlePresents = titleActiveFrames = 0u;
     }
