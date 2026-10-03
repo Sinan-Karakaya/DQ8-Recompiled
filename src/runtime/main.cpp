@@ -339,12 +339,17 @@ int main(int argc, char **argv)
 #endif
 
     std::printf("[dq8] starting execution at 0x%08X\n", entryPoint);
-    [[maybe_unused]] const bool renderCounterReady = dq8::diagnostics::configureRenderCadenceProbe(runtime);
 #if defined(DQ8_HAS_SDLGPU)
+    // The settings menu can show the frame rate at any time, so the counter
+    // goes in whenever the backend owns the window.
+    const bool renderCounterReady =
+        dq8::diagnostics::configureRenderCadenceProbe(runtime, sdlWindowBackend != nullptr);
     if (renderCounterReady && sdlWindowBackend)
         sdlWindowBackend->setCompletedRenderCounter([] {
             return dq8::diagnostics::RenderCadenceProbe::instance().publishedCompletedRoutines();
         });
+#else
+    dq8::diagnostics::configureRenderCadenceProbe(runtime);
 #endif
     runtime.run();
 
