@@ -94,6 +94,8 @@ DisplaySettings loadDisplaySettings() {
             for (auto filter : {OutputFilter::Sharp, OutputFilter::Bilinear, OutputFilter::Nearest})
                 if (value == filterKey(filter))
                     settings.filter = filter;
+        } else if (key == "remove_line_blend") {
+            settings.removeLineBlend = value == "1";
         } else if (key == "fullscreen") {
             settings.fullscreen = value == "1";
         } else if (key == "show_fps") {
@@ -114,6 +116,7 @@ bool saveDisplaySettings(const DisplaySettings &settings) {
          << "internal_scale=" << settings.internalScale << '\n'
          << "aspect=" << aspectKey(settings.aspect) << '\n'
          << "filter=" << filterKey(settings.filter) << '\n'
+         << "remove_line_blend=" << (settings.removeLineBlend ? 1 : 0) << '\n'
          << "fullscreen=" << (settings.fullscreen ? 1 : 0) << '\n'
          << "show_fps=" << (settings.showFps ? 1 : 0) << '\n';
     return static_cast<bool>(file);
@@ -304,6 +307,9 @@ void SdlGpuMenu::drawMenu(uint32_t activeScale) {
         }
         ImGui::EndCombo();
     }
+
+    changed |= ImGui::Checkbox("Sharper picture (remove the PS2's line blending)",
+                               &m_settings.removeLineBlend);
 
     ImGui::SeparatorText("Window");
     changed |= ImGui::Checkbox("Fullscreen (F11)", &m_settings.fullscreen);

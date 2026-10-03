@@ -35,6 +35,8 @@ struct DisplaySettings {
     uint32_t internalScale = 1u; // 1..8, a multiple of the GS's own resolution
     DisplayAspect aspect = DisplayAspect::Auto;
     OutputFilter filter = OutputFilter::Sharp;
+    // Show the frame without the PS2's one-line display blend (deflicker).
+    bool removeLineBlend = true;
     bool fullscreen = false;
     bool showFps = false;
 };
