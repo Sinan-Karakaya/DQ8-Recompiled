@@ -53,6 +53,7 @@ const uint FLAG_TCC = 1u << 2u;
 const uint FLAG_FGE = 1u << 3u;
 const uint FLAG_ATE = 1u << 4u;
 const uint FLAG_LINEAR = 1u << 5u;
+const uint FLAG_NATIVE_GRID = 1u << 6u;
 
 const uint WRAP_REPEAT = 0u;
 const uint WRAP_CLAMP = 1u;
@@ -141,6 +142,17 @@ vec4 sampleTexture() {
         // separately rather than folded into gl_Position.
         const float q = abs(vQ) > 1.0e-8 ? vQ : 1.0;
         texel = (vTexCoord / q) * params.textureSize.xy;
+    }
+
+    if ((params.control.x & FLAG_NATIVE_GRID) != 0u) {
+        // Move the coordinate to where the GS samples this native pixel:
+        // GS pixel p covers host pixels [p*scale, (p+1)*scale) and is sampled
+        // at the centre of the first. UVs are affine in a UV draw, so the
+        // derivatives carry it exactly.
+        const float scale = float((params.control.x >> 24u) & 15u);
+        const vec2 host = gl_FragCoord.xy;
+        const vec2 offset = floor(host / scale) * scale + 0.5 - host;
+        texel += dFdx(texel) * offset.x + dFdy(texel) * offset.y;
     }
 
     if ((params.control.x & FLAG_LINEAR) == 0u) {

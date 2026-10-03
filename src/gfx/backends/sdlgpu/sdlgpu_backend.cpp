@@ -502,7 +502,8 @@ struct SdlGpuBackend::Impl {
     std::string lastWindowError;
     std::atomic<uint32_t> requestedScale{0u};
     std::atomic<uint32_t> activeScale{1u};
-
+    // Removes the PS2's one-line display blend; read by the composing thread.
+    std::atomic<bool> removeLineBlend{false};
     uint64_t previousPresentDraws = 0u;
     uint64_t previousPresentTransfers = 0u;
     uint64_t titlePresents = 0u;
@@ -1029,8 +1030,14 @@ struct SdlGpuBackend::Impl {
         draw.vertexUniforms.targetSize[1] = static_cast<float>(color->height);
         draw.vertexUniforms.targetSize[2] = 1.0f / static_cast<float>(color->width);
         draw.vertexUniforms.targetSize[3] = 1.0f / static_cast<float>(color->height);
-        draw.vertexUniforms.adjust[0] = kSampleOffset;
-        draw.vertexUniforms.adjust[1] = kSampleOffset;
+        // In GS pixels, before the viewport scales them: half a host pixel,
+        // so GS pixel p covers exactly host pixels [p*scale, (p+1)*scale) and
+        // its sample point lands on the first of them. Half a GS pixel would
+        // be right only at 1x; above it every primitive, and every copy DQ8
+        // makes of the frame, sat half a native pixel off.
+        const float sampleOffset = kSampleOffset / static_cast<float>(std::max(color->scale, 1u));
+        draw.vertexUniforms.adjust[0] = sampleOffset;
+        draw.vertexUniforms.adjust[1] = sampleOffset;
         draw.vertexUniforms.adjust[2] = kClipYDirection;
 
         uint32_t control = 0u;
@@ -1157,6 +1164,13 @@ struct SdlGpuBackend::Impl {
                     control |= kFragFlagTcc;
                 if (state.linearFilter)
                     control |= kFragFlagLinear;
+                // A sprite's UVs can span a texel more than its pixels (DQ8's
+                // font: 23 texels over 22 pixels), so the GS never reaches the
+                // last one. Sampling between native pixels would, and pull in
+                // the neighbouring glyph as thin lines and dots.
+                if (state.prim.fst && !state.linearFilter && color->scale > 1u)
+                    control |= kFragFlagNativeGrid |
+                               (std::min<uint32_t>(color->scale, 15u) << kFragTargetScaleShift);
                 textureWidth = static_cast<float>(std::max<uint16_t>(state.textureWidth, 1u));
                 textureHeight = static_cast<float>(std::max<uint16_t>(state.textureHeight, 1u));
                 clampState = gsDecodeClamp(context.clamp);
@@ -2364,10 +2378,19 @@ struct SdlGpuBackend::Impl {
         const GsSmode2State smode2 = gsDecodeSmode2(request.smode2);
         const bool halfHeightSource = smode2.interlaced && smode2.frameMode;
 
-        const GsDisplaySetup circuit1 =
+        GsDisplaySetup circuit1 =
             gsDecodeDisplay(request.dispfb1, request.display1, pmode.enableCircuit1);
         const GsDisplaySetup circuit2 =
             gsDecodeDisplay(request.dispfb2, request.display2, pmode.enableCircuit2);
+        // DQ8 shows the same buffer on both circuits a line apart and blends
+        // them 50/50, which hid interlace flicker on a TV. On a progressive
+        // display it only blurs, by a native line at every internal scale.
+        // Reading both at one origin leaves the blend a no-op.
+        if (removeLineBlend.load(std::memory_order_relaxed) && circuit1.valid && circuit2.valid &&
+            circuit1.fbp == circuit2.fbp && circuit1.psm == circuit2.psm &&
+            circuit1.fbw == circuit2.fbw && circuit1.originX == circuit2.originX &&
+            (circuit1.originY == circuit2.originY + 1u || circuit2.originY == circuit1.originY + 1u))
+            circuit1.originY = circuit2.originY;
         if (!circuit1.valid && !circuit2.valid)
             return;
         if (circuit1.valid && circuit2.valid)

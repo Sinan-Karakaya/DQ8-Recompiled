@@ -90,6 +90,11 @@ inline constexpr uint32_t kFragFlagTcc = 1u << 2u;
 inline constexpr uint32_t kFragFlagFge = 1u << 3u;
 inline constexpr uint32_t kFragFlagAte = 1u << 4u;
 inline constexpr uint32_t kFragFlagLinear = 1u << 5u;
+// Point-sampled UV (2D) draw into an upscaled target: take each texel where
+// the GS would, at the native pixel's sample point. The target's scale sits
+// at kFragTargetScaleShift.
+inline constexpr uint32_t kFragFlagNativeGrid = 1u << 6u;
+inline constexpr uint32_t kFragTargetScaleShift = 24u;
 
 struct GsPipelineKey {
     uint32_t colorFormat = 0u;
