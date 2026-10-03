@@ -10,13 +10,15 @@
 #include <SDL3/SDL.h>
 
 #include <cstdint>
+#include <functional>
 #include <string>
 
 namespace dq8::gfx {
 
 // How the game picture is fitted into the window.
 enum class DisplayAspect : uint8_t {
-    Standard4x3,  // what a PS2 shows on a 4:3 TV; the default
+    Auto,         // follows the game's own Screen Size setting; the default
+    Standard4x3,  // what a PS2 shows on a 4:3 TV
     Wide16x9,     // stretched to 16:9
     SquarePixels, // the GS frame 1:1, as earlier builds showed it (8:7)
     Fill,         // the whole window, whatever its shape
@@ -31,7 +33,7 @@ enum class OutputFilter : uint8_t {
 
 struct DisplaySettings {
     uint32_t internalScale = 1u; // 1..8, a multiple of the GS's own resolution
-    DisplayAspect aspect = DisplayAspect::Standard4x3;
+    DisplayAspect aspect = DisplayAspect::Auto;
     OutputFilter filter = OutputFilter::Sharp;
     bool fullscreen = false;
     bool showFps = false;
@@ -66,6 +68,11 @@ public:
     void render(SDL_GPUCommandBuffer *commands, SDL_GPUTexture *target, double rendersPerSecond,
                 uint32_t activeScale);
 
+    // The game's own widescreen setting: 1 for 16:9, 0 for 4:3, -1 unknown.
+    // DisplayAspect::Auto follows it.
+    void setGameWidescreenQuery(std::function<int()> query) { m_gameWidescreen = std::move(query); }
+    int gameWidescreen() const { return m_gameWidescreen ? m_gameWidescreen() : -1; }
+
     DisplaySettings &settings() { return m_settings; }
     const DisplaySettings &settings() const { return m_settings; }
 
@@ -87,6 +94,7 @@ private:
     bool m_scaleRequested = false;
     bool m_backHeld = false;
     std::string m_iniPath;
+    std::function<int()> m_gameWidescreen;
 };
 
 } // namespace dq8::gfx

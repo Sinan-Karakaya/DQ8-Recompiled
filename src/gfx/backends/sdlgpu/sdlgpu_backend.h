@@ -8,6 +8,7 @@
 #include "runtime/gs/gs_backend.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -137,6 +138,9 @@ public:
     // Install before execution. The callback reads a thread-safe game counter.
     using CompletedRenderCounter = uint64_t (*)();
     void setCompletedRenderCounter(CompletedRenderCounter counter);
+    // The game's own widescreen setting, for the menu's Auto aspect: returns 1
+    // for 16:9, 0 for 4:3, -1 when unknown. Called on the presenting thread.
+    void setGameWidescreenQuery(std::function<int()> query);
     // Pumps SDL events. Returns false when the window wants to close.
     bool pumpEvents();
     // Host keyboard/gamepad state in the runtime's pad encoding, sampled by

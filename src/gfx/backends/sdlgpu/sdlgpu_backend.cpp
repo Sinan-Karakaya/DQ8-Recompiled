@@ -483,6 +483,7 @@ struct SdlGpuBackend::Impl {
     uint32_t sharpHeight = 0u;
     // The game's own frame rate, for the menu's counter.
     double overlayRendersPerSecond = -1.0;
+    int loggedGameWidescreen = -2;
     uint64_t overlayCompletedStart = 0u;
     std::chrono::steady_clock::time_point overlaySampleStart{};
     uint64_t previousPresentDraws = 0u;
@@ -1950,7 +1951,22 @@ struct SdlGpuBackend::Impl {
 
         SDL_GPUTexture *source = slot.texture;
         const DisplaySettings &display = menu.settings();
-        const DisplayRect rect = fitDisplay(display, sourceWidth, sourceHeight,
+        const int gameWidescreen = menu.gameWidescreen();
+        if (display.aspect == DisplayAspect::Auto && gameWidescreen != loggedGameWidescreen) {
+            loggedGameWidescreen = gameWidescreen;
+            std::fprintf(stderr, "[menu] aspect auto: %s (the game's Screen Size)\n",
+                         gameWidescreen == 1 ? "16:9" : "4:3");
+            // A windowed game follows the picture's shape instead of
+            // letterboxing it; fullscreen and maximised windows keep theirs.
+            if ((SDL_GetWindowFlags(window) & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_MAXIMIZED)) == 0) {
+                int width = 0, height = 0;
+                SDL_GetWindowSize(window, &width, &height);
+                const double aspect = gameWidescreen == 1 ? 16.0 / 9.0 : 4.0 / 3.0;
+                if (height > 0)
+                    SDL_SetWindowSize(window, static_cast<int>(std::lround(height * aspect)), height);
+            }
+        }
+        const DisplayRect rect = fitDisplay(display, gameWidescreen, sourceWidth, sourceHeight,
                                             swapchainWidth, swapchainHeight);
 
         SDL_GPUBlitInfo blit{};
@@ -2012,10 +2028,11 @@ struct SdlGpuBackend::Impl {
     };
 
     // Where the frame goes in the window, from the menu's aspect and filter.
-    static DisplayRect fitDisplay(const DisplaySettings &display, uint32_t sourceWidth,
+    static DisplayRect fitDisplay(const DisplaySettings &display, int gameWidescreen, uint32_t sourceWidth,
                                   uint32_t sourceHeight, uint32_t windowWidth, uint32_t windowHeight) {
         double aspect = 4.0 / 3.0;
         switch (display.aspect) {
+        case DisplayAspect::Auto: aspect = gameWidescreen == 1 ? 16.0 / 9.0 : 4.0 / 3.0; break;
         case DisplayAspect::Standard4x3: aspect = 4.0 / 3.0; break;
         case DisplayAspect::Wide16x9: aspect = 16.0 / 9.0; break;
         case DisplayAspect::SquarePixels: aspect = double(sourceWidth) / sourceHeight; break;
@@ -2903,6 +2920,11 @@ bool SdlGpuBackend::openWindow(const char *title, uint32_t width, uint32_t heigh
     if (!m_impl->menu.initialize(m_impl->window, m_impl->device.handle(), menuError))
         std::fprintf(stderr, "[menu] %s; settings menu unavailable\n", menuError.c_str());
     return true;
+}
+
+void SdlGpuBackend::setGameWidescreenQuery(std::function<int()> query) {
+    std::lock_guard lock(m_impl->mutex);
+    m_impl->menu.setGameWidescreenQuery(std::move(query));
 }
 
 bool SdlGpuBackend::hasWindow() const {

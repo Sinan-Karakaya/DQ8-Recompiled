@@ -185,6 +185,22 @@ int main(int argc, char **argv)
         return 1;
     }
 
+#if defined(DQ8_HAS_SDLGPU)
+    if (sdlWindowBackend != nullptr)
+    {
+        // The game's Screen Size setting (Normal 4:3 / Wide Screen 16:9), for
+        // the settings menu's Auto aspect. The byte at gp-0x7014 is what
+        // 0x168FF0 sets and 0x168F90 turns into the projection's horizontal
+        // factor (0.75 for 4:3, 0.5625 for 16:9); SLUS-212.07 addresses.
+        constexpr uint32_t kScreenSizeFlag = 0x003D275Cu;
+        const uint8_t *rdram = runtime.memory().getRDRAM();
+        sdlWindowBackend->setGameWidescreenQuery([rdram]() -> int {
+            const uint8_t value = rdram[kScreenSizeFlag];
+            return value <= 1u ? static_cast<int>(value) : -1;
+        });
+    }
+#endif
+
     // The sound drivers from the disc run unmodified on an emulated IOP, and
     // the game's libsdr and Sound Kit reach them over SIF. Audio output starts
     // when sceSifLoadModule loads the first of them.

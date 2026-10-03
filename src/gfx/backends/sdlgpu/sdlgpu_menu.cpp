@@ -20,7 +20,8 @@ constexpr uint32_t kMaxScale = 8u;
 
 const char *aspectName(DisplayAspect aspect) {
     switch (aspect) {
-    case DisplayAspect::Standard4x3: return "4:3 (original)";
+    case DisplayAspect::Auto: return "Auto (game's Screen Size)";
+    case DisplayAspect::Standard4x3: return "4:3";
     case DisplayAspect::Wide16x9: return "16:9 (stretched)";
     case DisplayAspect::SquarePixels: return "Square pixels (8:7)";
     case DisplayAspect::Fill: return "Fill window";
@@ -39,12 +40,13 @@ const char *filterName(OutputFilter filter) {
 
 const char *aspectKey(DisplayAspect aspect) {
     switch (aspect) {
+    case DisplayAspect::Auto: return "auto";
     case DisplayAspect::Standard4x3: return "4:3";
     case DisplayAspect::Wide16x9: return "16:9";
     case DisplayAspect::SquarePixels: return "square";
     case DisplayAspect::Fill: return "fill";
     }
-    return "4:3";
+    return "auto";
 }
 
 const char *filterKey(OutputFilter filter) {
@@ -84,7 +86,7 @@ DisplaySettings loadDisplaySettings() {
             settings.internalScale = std::clamp<uint32_t>(
                 static_cast<uint32_t>(std::strtoul(value.c_str(), nullptr, 10)), 1u, kMaxScale);
         } else if (key == "aspect") {
-            for (auto aspect : {DisplayAspect::Standard4x3, DisplayAspect::Wide16x9,
+            for (auto aspect : {DisplayAspect::Auto, DisplayAspect::Standard4x3, DisplayAspect::Wide16x9,
                                 DisplayAspect::SquarePixels, DisplayAspect::Fill})
                 if (value == aspectKey(aspect))
                     settings.aspect = aspect;
@@ -277,7 +279,7 @@ void SdlGpuMenu::drawMenu(uint32_t activeScale) {
 
     ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16.0f);
     if (ImGui::BeginCombo("Aspect ratio", aspectName(m_settings.aspect))) {
-        for (auto aspect : {DisplayAspect::Standard4x3, DisplayAspect::Wide16x9,
+        for (auto aspect : {DisplayAspect::Auto, DisplayAspect::Standard4x3, DisplayAspect::Wide16x9,
                             DisplayAspect::SquarePixels, DisplayAspect::Fill}) {
             if (ImGui::Selectable(aspectName(aspect), aspect == m_settings.aspect)) {
                 changed |= aspect != m_settings.aspect;
@@ -286,6 +288,11 @@ void SdlGpuMenu::drawMenu(uint32_t activeScale) {
         }
         ImGui::EndCombo();
     }
+    // Widescreen is the game's own: it widens the view and lays out its
+    // menus for 16:9. This only says which way it is set.
+    const int wide = gameWidescreen();
+    ImGui::TextDisabled("Game Screen Size: %s", wide == 1 ? "Wide Screen 16:9" : wide == 0 ? "Normal 4:3" : "not set yet");
+    ImGui::TextDisabled("Widescreen: set Screen Size in the game's own Settings menu.");
 
     ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16.0f);
     if (ImGui::BeginCombo("Upscaling filter", filterName(m_settings.filter))) {
