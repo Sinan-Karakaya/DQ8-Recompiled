@@ -141,6 +141,16 @@ if(DQ8_BUILD_PS2RECOMP)
         # Keep --trace-printf available even when the compiler omits _DEBUG.
         target_compile_definitions(ps2_runtime PRIVATE RUNTIME_DECI2CALL)
     endif()
+
+    # Optional: tune the runtime (VU programs, VIF, GS frontend) for the build
+    # machine, e.g. -DDQ8_RUNTIME_ARCH=native. The binary then only runs on
+    # CPUs with the same features. FP contraction stays off: an FMA rounds
+    # once where the PS2 rounds twice, which would change VU results.
+    set(DQ8_RUNTIME_ARCH "" CACHE STRING
+        "Target CPU for ps2_runtime (-march value, e.g. native or x86-64-v3); empty keeps the default")
+    if(DQ8_RUNTIME_ARCH AND TARGET ps2_runtime)
+        target_compile_options(ps2_runtime PRIVATE -march=${DQ8_RUNTIME_ARCH} -ffp-contract=off)
+    endif()
 endif()
 
 add_subdirectory(src)
