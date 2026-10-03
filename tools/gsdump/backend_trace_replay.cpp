@@ -53,6 +53,9 @@ int main(int argc, char **argv) try {
         auto hardware = createSdlGpuBackend(error);
         if (!hardware) throw std::runtime_error(error);
         gpu = hardware.get();
+        // Replays at an internal resolution multiple, as the menu sets it.
+        if (const char *scale = std::getenv("DQ8_GS_REPLAY_SCALE"))
+            gpu->setResolutionScale(static_cast<uint32_t>(std::strtoul(scale, nullptr, 10)));
         backend = std::move(hardware);
     }
     const char *workerValue = std::getenv("DQ8_GS_WORKER");
@@ -66,6 +69,16 @@ int main(int argc, char **argv) try {
         std::setvbuf(stdout, nullptr, _IONBF, 0u);
     const char *probeValue = std::getenv("DQ8_GS_TRACE_PROBE_DRAW");
     const uint64_t probeDraw = probeValue ? std::stoull(probeValue) : std::numeric_limits<uint64_t>::max();
+    // DQ8_GS_REPLAY_SKIP=first-last drops those draws, to bisect which one
+    // produces an artifact.
+    uint64_t skipFirst = std::numeric_limits<uint64_t>::max(), skipLast = 0;
+    if (const char *skip = std::getenv("DQ8_GS_REPLAY_SKIP")) {
+        unsigned long long first = 0, last = 0;
+        if (std::sscanf(skip, "%llu-%llu", &first, &last) == 2) {
+            skipFirst = first;
+            skipLast = last;
+        }
+    }
     uint64_t records = 0, draws = 0, frames = 0;
     double seconds = 0;
     while (file.peek() != std::char_traits<char>::eof()) {
@@ -103,7 +116,8 @@ int main(int argc, char **argv) try {
                         double(v.z), v.u, v.v, v.s, v.t, v.q, v.r, v.g, v.b, v.a);
                 }
             }
-            backend->Submit(batch);
+            if (draws < skipFirst || draws > skipLast)
+                backend->Submit(batch);
             if (draws == probeDraw) {
                 std::vector<uint8_t> snapshot;
                 backend->SnapshotVram(snapshot);
