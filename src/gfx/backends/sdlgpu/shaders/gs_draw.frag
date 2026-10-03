@@ -123,6 +123,14 @@ vec4 fetchTexel(ivec2 texel) {
     return fetchTexelAt(texel, vec2(0.5));
 }
 
+// The GS interpolates texture coordinates in fixed point, so a 1:1 copy lands
+// exactly on each texel; the host interpolates in float and can land a hair
+// below, where floor() picks the previous texel. DQ8 copies every frame to
+// its display buffer in 16-pixel strips, and that pulled 4-pixel groups of
+// dialog borders one row out of line. Far below the GS's 1/16 texel
+// precision, so no coordinate the GS could produce rounds differently.
+const float POINT_SAMPLE_BIAS = 1.0 / 256.0;
+
 vec4 sampleTexture() {
     vec2 texel;
     if ((params.control.x & FLAG_FST) != 0u) {
@@ -136,7 +144,7 @@ vec4 sampleTexture() {
     }
 
     if ((params.control.x & FLAG_LINEAR) == 0u) {
-        const vec2 base = floor(texel);
+        const vec2 base = floor(texel + POINT_SAMPLE_BIAS);
         return fetchTexelAt(ivec2(base), texel - base);
     }
 
