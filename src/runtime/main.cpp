@@ -24,6 +24,7 @@
 
 #if defined(DQ8_HAS_SDLGPU)
 #include "gfx/backends/sdlgpu/sdlgpu_backend.h"
+#include "gfx/backends/sdlgpu/sdlgpu_menu.h"
 #include "gfx/gsdump/gs_backend_trace.h"
 #include "../../tools/runtime/gs_fan_probe.h"
 #include "runtime/ps2_pad_host.h"
@@ -73,7 +74,7 @@ int main(int argc, char **argv)
     bool tracePrintf = false;
     bool sound = true;
     std::string rasterBackend = "sw";
-    uint32_t resolutionScale = 1u;
+    uint32_t resolutionScale = 0u; // 0: the in-game menu's saved setting
 
     for (int i = 1; i < argc; ++i)
     {
@@ -114,6 +115,7 @@ int main(int argc, char **argv)
                         "  --cd-root=DIR    cdrom0: directory (default: the ELF's directory)\n"
                         "  --gs=BACKEND     raster backend: sw (default) or sdlgpu\n"
                         "  --scale=N        internal resolution multiplier for --gs=sdlgpu\n"
+                        "                   (default: the in-game menu's setting, F1)\n"
                         "  --mute           run the sound driver without playing anything\n"
                         "  --trace-printf   restore retail debug logging through the guest formatter\n"
                         "                   Set PS2X_DECI2_LOG_LIMIT=0 to remove the log limit.\n",
@@ -151,8 +153,9 @@ int main(int argc, char **argv)
         sdlBackend = dq8::gfx::createSdlGpuBackend(backendError);
         if (sdlBackend)
         {
-            sdlBackend->setResolutionScale(resolutionScale);
-            const uint32_t scale = sdlBackend->resolutionScale();
+            sdlBackend->setResolutionScale(resolutionScale != 0u
+                                               ? resolutionScale
+                                               : dq8::gfx::loadDisplaySettings().internalScale);
             std::string windowError;
             // Allow renderer comparisons using the runtime's presenter.
             const char *noWindow = std::getenv("DQ8_GFX_NO_WINDOW");
@@ -160,7 +163,7 @@ int main(int argc, char **argv)
             {
                 std::printf("[dq8] DQ8_GFX_NO_WINDOW: presenting through the runtime\n");
             }
-            else if (!sdlBackend->openWindow("DQ8Recomp", 640u * scale, 448u * scale, windowError))
+            else if (!sdlBackend->openWindow("DQ8Recomp", 0u, 0u, windowError))
             {
                 std::fprintf(stderr,
                              "[dq8] could not open a window (%s); presenting through "

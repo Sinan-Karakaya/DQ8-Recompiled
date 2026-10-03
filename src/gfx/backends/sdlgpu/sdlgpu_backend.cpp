@@ -2,6 +2,7 @@
 
 #include "gfx/backends/sdlgpu/sdlgpu_device.h"
 #include "gfx/backends/sdlgpu/sdlgpu_input.h"
+#include "gfx/backends/sdlgpu/sdlgpu_menu.h"
 #include "gfx/backends/sdlgpu/sdlgpu_targets.h"
 #include "gfx/backends/sdlgpu/sdlgpu_textures.h"
 #include "gfx/gs/gs_state.h"
@@ -474,6 +475,16 @@ struct SdlGpuBackend::Impl {
     uint32_t presentSourceHeight = 0u;
     bool windowCloseRequested = false;
     SdlPadInput pad;
+    SdlGpuMenu menu;
+    // Intermediate for the sharp-bilinear upscale: the frame at an integer
+    // multiple, nearest, which a bilinear blit then brings to its final size.
+    SDL_GPUTexture *sharpTexture = nullptr;
+    uint32_t sharpWidth = 0u;
+    uint32_t sharpHeight = 0u;
+    // The game's own frame rate, for the menu's counter.
+    double overlayRendersPerSecond = -1.0;
+    uint64_t overlayCompletedStart = 0u;
+    std::chrono::steady_clock::time_point overlaySampleStart{};
     uint64_t previousPresentDraws = 0u;
     uint64_t previousPresentTransfers = 0u;
     uint64_t titlePresents = 0u;
@@ -1938,35 +1949,159 @@ struct SdlGpuBackend::Impl {
         }
 
         SDL_GPUTexture *source = slot.texture;
-        const float fitScale = std::min(static_cast<float>(swapchainWidth) / static_cast<float>(sourceWidth),
-                                        static_cast<float>(swapchainHeight) / static_cast<float>(sourceHeight));
-        const float scaleFactor = fitScale >= 1.0f ? std::floor(fitScale) : fitScale;
-        const uint32_t targetWidth =
-            std::max<uint32_t>(1u, static_cast<uint32_t>(static_cast<float>(sourceWidth) * scaleFactor));
-        const uint32_t targetHeight =
-            std::max<uint32_t>(1u, static_cast<uint32_t>(static_cast<float>(sourceHeight) * scaleFactor));
+        const DisplaySettings &display = menu.settings();
+        const DisplayRect rect = fitDisplay(display, sourceWidth, sourceHeight,
+                                            swapchainWidth, swapchainHeight);
 
         SDL_GPUBlitInfo blit{};
         blit.source.texture = source;
         blit.source.w = sourceWidth;
         blit.source.h = sourceHeight;
         blit.destination.texture = swapchain;
-        blit.destination.x = (swapchainWidth - targetWidth) / 2u;
-        blit.destination.y = (swapchainHeight - targetHeight) / 2u;
-        blit.destination.w = targetWidth;
-        blit.destination.h = targetHeight;
+        blit.destination.x = rect.x;
+        blit.destination.y = rect.y;
+        blit.destination.w = rect.width;
+        blit.destination.h = rect.height;
         // CLEAR, not LOAD: the letterbox bars have to be painted, and the
         // swapchain image is recycled.
         blit.load_op = SDL_GPU_LOADOP_CLEAR;
         blit.clear_color = SDL_FColor{0.0f, 0.0f, 0.0f, 1.0f};
-        blit.filter = scaleFactor >= 1.0f ? SDL_GPU_FILTER_NEAREST : SDL_GPU_FILTER_LINEAR;
+        blit.filter = rect.nearest ? SDL_GPU_FILTER_NEAREST : SDL_GPU_FILTER_LINEAR;
+        if (display.filter == OutputFilter::Sharp && !rect.nearest &&
+            (rect.width > sourceWidth || rect.height > sourceHeight)) {
+            // Nearest to the integer multiple at or above the output size, so
+            // every source pixel is the same size, then bilinear down to it:
+            // crisp, and no uneven columns at a non-integer scale.
+            const uint32_t factor = std::max<uint32_t>(
+                1u, static_cast<uint32_t>(std::ceil(std::max(double(rect.width) / sourceWidth,
+                                                              double(rect.height) / sourceHeight))));
+            if (ensureSharpTexture(sourceWidth * factor, sourceHeight * factor)) {
+                SDL_GPUBlitInfo up{};
+                up.source.texture = source;
+                up.source.w = sourceWidth;
+                up.source.h = sourceHeight;
+                up.destination.texture = sharpTexture;
+                up.destination.w = sharpWidth;
+                up.destination.h = sharpHeight;
+                up.load_op = SDL_GPU_LOADOP_DONT_CARE;
+                up.filter = SDL_GPU_FILTER_NEAREST;
+                SDL_BlitGPUTexture(commands, &up);
+                blit.source.texture = sharpTexture;
+                blit.source.w = sharpWidth;
+                blit.source.h = sharpHeight;
+            }
+        }
         SDL_BlitGPUTexture(commands, &blit);
+        sampleOverlayRate();
+        menu.render(commands, swapchain, overlayRendersPerSecond, scale);
 
         SDL_GPUFence *displayed = SDL_SubmitGPUCommandBufferAndAcquireFence(commands);
         if (!displayed)
             return fail("SDL_SubmitGPUCommandBufferAndAcquireFence(present): ");
         slot.displayed = displayed;
+
+        uint32_t requestedScale = 0u;
+        if (menu.takeScaleRequest(requestedScale))
+            applyResolutionScale(requestedScale);
         return true;
+    }
+
+    struct DisplayRect {
+        uint32_t x = 0u, y = 0u, width = 1u, height = 1u;
+        bool nearest = false;
+    };
+
+    // Where the frame goes in the window, from the menu's aspect and filter.
+    static DisplayRect fitDisplay(const DisplaySettings &display, uint32_t sourceWidth,
+                                  uint32_t sourceHeight, uint32_t windowWidth, uint32_t windowHeight) {
+        double aspect = 4.0 / 3.0;
+        switch (display.aspect) {
+        case DisplayAspect::Standard4x3: aspect = 4.0 / 3.0; break;
+        case DisplayAspect::Wide16x9: aspect = 16.0 / 9.0; break;
+        case DisplayAspect::SquarePixels: aspect = double(sourceWidth) / sourceHeight; break;
+        case DisplayAspect::Fill: aspect = double(windowWidth) / windowHeight; break;
+        }
+        double width = windowWidth;
+        double height = width / aspect;
+        if (height > windowHeight) {
+            height = windowHeight;
+            width = height * aspect;
+        }
+        DisplayRect rect;
+        if (display.filter == OutputFilter::Nearest) {
+            // Whole multiples on each axis, so every pixel is drawn the same
+            // size; the aspect is then as close as whole multiples allow.
+            const uint32_t factorX = static_cast<uint32_t>(width / sourceWidth);
+            const uint32_t factorY = static_cast<uint32_t>(height / sourceHeight);
+            if (factorX >= 1u && factorY >= 1u) {
+                width = double(sourceWidth) * factorX;
+                height = double(sourceHeight) * factorY;
+                rect.nearest = true;
+            }
+        }
+        rect.width = std::max<uint32_t>(1u, static_cast<uint32_t>(std::lround(width)));
+        rect.height = std::max<uint32_t>(1u, static_cast<uint32_t>(std::lround(height)));
+        rect.x = (windowWidth - std::min(rect.width, windowWidth)) / 2u;
+        rect.y = (windowHeight - std::min(rect.height, windowHeight)) / 2u;
+        return rect;
+    }
+
+    bool ensureSharpTexture(uint32_t width, uint32_t height) {
+        // Past the device's limits the plain bilinear blit is close enough.
+        if (width > 8192u || height > 8192u)
+            return false;
+        if (sharpTexture && sharpWidth == width && sharpHeight == height)
+            return true;
+        if (sharpTexture)
+            SDL_ReleaseGPUTexture(device.handle(), sharpTexture);
+        SDL_GPUTextureCreateInfo info{};
+        info.type = SDL_GPU_TEXTURETYPE_2D;
+        info.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+        info.width = width;
+        info.height = height;
+        info.layer_count_or_depth = 1u;
+        info.num_levels = 1u;
+        info.sample_count = SDL_GPU_SAMPLECOUNT_1;
+        info.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
+        sharpTexture = SDL_CreateGPUTexture(device.handle(), &info);
+        sharpWidth = sharpTexture ? width : 0u;
+        sharpHeight = sharpTexture ? height : 0u;
+        return sharpTexture != nullptr;
+    }
+
+    void sampleOverlayRate() {
+        if (!menu.settings().showFps || !completedRenderCounter)
+            return;
+        const auto now = std::chrono::steady_clock::now();
+        const uint64_t completed = completedRenderCounter();
+        if (overlaySampleStart == std::chrono::steady_clock::time_point{}) {
+            overlaySampleStart = now;
+            overlayCompletedStart = completed;
+            return;
+        }
+        const double seconds = std::chrono::duration<double>(now - overlaySampleStart).count();
+        if (seconds < 0.5)
+            return;
+        overlayRendersPerSecond = completed >= overlayCompletedStart
+            ? (completed - overlayCompletedStart) / seconds : 0.0;
+        overlaySampleStart = now;
+        overlayCompletedStart = completed;
+    }
+
+    // Takes the backend lock: called from the presenting thread, which holds
+    // it nowhere on this path.
+    void applyResolutionScale(uint32_t requested) {
+        std::lock_guard lock(mutex);
+        flushDraws();
+        std::string error;
+        if (targets) {
+            targets->resolveAll(error);
+            targets->setScale(requested);
+            scale = targets->scale();
+        } else {
+            scale = std::clamp<uint32_t>(requested, 1u, 8u);
+        }
+        std::fprintf(stderr, "[menu] internal resolution %ux\n", scale);
     }
 
     // Uploads a CPU-composed frame into the present source. Only used when the
@@ -2379,9 +2514,13 @@ struct SdlGpuBackend::Impl {
             if (event.type == SDL_EVENT_QUIT ||
                 event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
                 windowCloseRequested = true;
+            if (menu.handleEvent(event))
+                continue;
             pad.handleEvent(event);
         }
-        pad.poll(SDL_GetKeyboardState(nullptr), SDL_GetKeyboardFocus() == window);
+        // While the menu is open the game sees an idle pad.
+        pad.poll(SDL_GetKeyboardState(nullptr),
+                 SDL_GetKeyboardFocus() == window && !menu.isOpen());
         return !windowCloseRequested;
     }
 
@@ -2429,6 +2568,9 @@ SdlGpuBackend::~SdlGpuBackend() {
             SDL_ReleaseGPUTexture(m_impl->device.handle(), feedback.texture);
         if (m_impl->presentUpload)
             SDL_ReleaseGPUTexture(m_impl->device.handle(), m_impl->presentUpload);
+        if (m_impl->sharpTexture)
+            SDL_ReleaseGPUTexture(m_impl->device.handle(), m_impl->sharpTexture);
+        m_impl->menu.shutdown();
         if (m_impl->window) {
             SDL_ReleaseWindowFromGPUDevice(m_impl->device.handle(), m_impl->window);
             SDL_DestroyWindow(m_impl->window);
@@ -2730,6 +2872,16 @@ bool SdlGpuBackend::openWindow(const char *title, uint32_t width, uint32_t heigh
     if (m_impl->window != nullptr)
         return true;
 
+    if (width == 0u || height == 0u) {
+        // 4:3, at the largest whole multiple of the GS height that leaves
+        // room on the desktop.
+        SDL_Rect usable{0, 0, 1280, 960};
+        SDL_GetDisplayUsableBounds(SDL_GetPrimaryDisplay(), &usable);
+        const uint32_t multiple = std::max<uint32_t>(
+            1u, static_cast<uint32_t>(usable.h * 0.85 / 448.0));
+        height = 448u * multiple;
+        width = height * 4u / 3u;
+    }
     m_impl->window = SDL_CreateWindow(title, static_cast<int>(width),
                                       static_cast<int>(height), SDL_WINDOW_RESIZABLE);
     if (!m_impl->window) {
@@ -2747,6 +2899,9 @@ bool SdlGpuBackend::openWindow(const char *title, uint32_t width, uint32_t heigh
     std::string inputError;
     if (!m_impl->pad.initialize(inputError))
         std::fprintf(stderr, "[pad] %s; keyboard remains available\n", inputError.c_str());
+    std::string menuError;
+    if (!m_impl->menu.initialize(m_impl->window, m_impl->device.handle(), menuError))
+        std::fprintf(stderr, "[menu] %s; settings menu unavailable\n", menuError.c_str());
     return true;
 }
 

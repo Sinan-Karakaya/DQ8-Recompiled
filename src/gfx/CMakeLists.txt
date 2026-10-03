@@ -80,6 +80,27 @@ if(DQ8_GFX_SDL_TARGET)
     )
     target_link_libraries(dq8_gfx_sdlgpu PUBLIC dq8_gfx_gs ${DQ8_GFX_SDL_TARGET})
 
+    # Dear ImGui draws the in-game settings menu (sdlgpu_menu.cpp) with its
+    # SDL3 event and SDL GPU rendering backends.
+    include(FetchContent)
+    FetchContent_Declare(dq8_imgui
+        GIT_REPOSITORY https://github.com/ocornut/imgui.git
+        GIT_TAG v1.92.7
+        GIT_SHALLOW TRUE)
+    FetchContent_MakeAvailable(dq8_imgui)
+    add_library(dq8_imgui STATIC
+        "${dq8_imgui_SOURCE_DIR}/imgui.cpp"
+        "${dq8_imgui_SOURCE_DIR}/imgui_draw.cpp"
+        "${dq8_imgui_SOURCE_DIR}/imgui_tables.cpp"
+        "${dq8_imgui_SOURCE_DIR}/imgui_widgets.cpp"
+        "${dq8_imgui_SOURCE_DIR}/backends/imgui_impl_sdl3.cpp"
+        "${dq8_imgui_SOURCE_DIR}/backends/imgui_impl_sdlgpu3.cpp")
+    target_include_directories(dq8_imgui SYSTEM PUBLIC
+        "${dq8_imgui_SOURCE_DIR}" "${dq8_imgui_SOURCE_DIR}/backends")
+    target_link_libraries(dq8_imgui PUBLIC ${DQ8_GFX_SDL_TARGET})
+    target_sources(dq8_gfx_sdlgpu PRIVATE backends/sdlgpu/sdlgpu_menu.cpp)
+    target_link_libraries(dq8_gfx_sdlgpu PRIVATE dq8_imgui)
+
     dq8_add_shader(dq8_gfx_sdlgpu
         SOURCE "${CMAKE_CURRENT_LIST_DIR}/backends/sdlgpu/shaders/gs_draw.vert"
         STAGE vert SYMBOL kGsDrawVertSpirv)

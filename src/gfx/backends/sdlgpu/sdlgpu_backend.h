@@ -124,7 +124,8 @@ public:
     GSTransferSnapshot GetTransferSnapshot() const override;
 
     // Internal render resolution, as a multiple of the GS's own. Changing it
-    // discards every render target, so it is set once at startup in practice.
+    // resolves every render target back to GS memory and rebuilds them at the
+    // new size; the in-game menu does it between frames.
     void setResolutionScale(uint32_t scale);
     uint32_t resolutionScale() const;
 
