@@ -993,6 +993,10 @@ struct SdlGpuBackend::Impl {
         if (!framebufferFetch && blend.enabled && alpha.c == kBlendAlphaDest)
             ++stats.destinationAlphaFactors;
         const bool scaleAlpha = !framebufferFetch && blend.enabled && alpha.c == kBlendAlphaSource;
+        // Those draws still write their alpha on the GS, and games read it
+        // back: DQ8 draws its characters into a layer whose alpha becomes the
+        // shadow mask. A second pass over the same primitives stores it.
+        const bool alphaPass = scaleAlpha && (writeMask & SDL_GPU_COLORCOMPONENT_A) != 0u;
         if (scaleAlpha) {
             writeMask &= static_cast<uint8_t>(~SDL_GPU_COLORCOMPONENT_A);
             // Alpha above 0x80 asks for a blend factor greater than one, which
@@ -1223,10 +1227,42 @@ struct SdlGpuBackend::Impl {
         ++stats.primitivesDrawn;
         stats.trianglesDrawn += addedVertices / 3u;
 
+        // The alpha half of a source-alpha blend: the same primitives with
+        // blending off, writing exact alpha only, where the colour pass wrote.
+        // Colour blending here never reads destination alpha, so drawing all
+        // the colour and then all the alpha matches the GS's per-primitive
+        // order; with depth write off and the test widened to equality, each
+        // pixel takes the alpha of the primitive that won it.
+        DrawBatch alphaDraw;
+        if (alphaPass) {
+            alphaDraw = draw;
+            alphaDraw.pipeline.blendEnabled = 0u;
+            alphaDraw.pipeline.colorWriteMask = SDL_GPU_COLORCOMPONENT_A;
+            alphaDraw.pipeline.depthWrite = 0u;
+            if (alphaDraw.pipeline.depthCompare == SDL_GPU_COMPAREOP_GREATER)
+                alphaDraw.pipeline.depthCompare = SDL_GPU_COMPAREOP_GREATER_OR_EQUAL;
+            else if (alphaDraw.pipeline.depthCompare == SDL_GPU_COMPAREOP_LESS)
+                alphaDraw.pipeline.depthCompare = SDL_GPU_COMPAREOP_LESS_OR_EQUAL;
+            alphaDraw.usesBlendConstant = false;
+            alphaDraw.blendConstant = 0.0f;
+            alphaDraw.fragmentUniforms.misc[0] = 1.0f;
+            alphaDraw.overwritten = {};
+            alphaDraw.snapshot = false;
+        }
+
         // Merge into the open batch when nothing about the state changed. The
         // frontend hands over one primitive at a time, so without this every
-        // triangle would be its own draw call.
-        if (!batches.empty() && batches.back().sameStateAs(draw)) {
+        // triangle would be its own draw call. A colour/alpha pair grows as a
+        // pair.
+        const size_t open = batches.size();
+        if (alphaPass && open >= 2u && batches[open - 2u].sameStateAs(draw) &&
+            batches[open - 1u].sameStateAs(alphaDraw)) {
+            for (size_t index = open - 2u; index < open; ++index) {
+                batches[index].vertexCount += addedVertices;
+                batches[index].written.merge(draw.written);
+                batches[index].writtenPages |= draw.writtenPages;
+            }
+        } else if (!alphaPass && open >= 1u && batches.back().sameStateAs(draw)) {
             batches.back().vertexCount += addedVertices;
             batches.back().written.merge(draw.written);
             batches.back().writtenPages |= draw.writtenPages;
@@ -1235,6 +1271,12 @@ struct SdlGpuBackend::Impl {
             draw.vertexCount = addedVertices;
             batches.push_back(draw);
             ++stats.batches;
+            if (alphaPass) {
+                alphaDraw.firstVertex = firstVertex;
+                alphaDraw.vertexCount = addedVertices;
+                batches.push_back(alphaDraw);
+                ++stats.batches;
+            }
         }
         if (draw.snapshot)
             feedbackWritten.clear();
