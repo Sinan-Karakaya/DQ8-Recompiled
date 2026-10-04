@@ -1172,7 +1172,12 @@ struct SdlGpuBackend::Impl {
                 // font: 23 texels over 22 pixels), so the GS never reaches the
                 // last one. Sampling between native pixels would, and pull in
                 // the neighbouring glyph as thin lines and dots.
-                if (state.prim.fst && !state.linearFilter && color->scale > 1u)
+                // Draws into a CT16 view are channel shuffles: bit-exact
+                // copies of reinterpreted pixels. Filtering between native
+                // pixels would blend neighbouring halfwords, so they sample
+                // on the native grid too, bilinear or not.
+                if (state.prim.fst && color->scale > 1u &&
+                    (!state.linearFilter || color->psm == GS_PSM_CT16 || color->psm == GS_PSM_CT16S))
                     control |= kFragFlagNativeGrid |
                                (std::min<uint32_t>(color->scale, 15u) << kFragTargetScaleShift);
                 textureWidth = static_cast<float>(std::max<uint16_t>(state.textureWidth, 1u));
