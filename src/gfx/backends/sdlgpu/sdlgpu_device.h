@@ -137,10 +137,11 @@ public:
     // the set of distinct GS states a game uses is small and bounded.
     SDL_GPUGraphicsPipeline *pipeline(const GsPipelineKey &key, std::string &error);
 
-    // Reinterprets identical native GS pages between CT32 and CT16 views.
+    // Reinterprets identical GS pages between CT32 and CT16 views, of
+    // width x height GS pixels at `scale` physical pixels each.
     // The caller validates extents/ownership and commits their state afterward.
     bool reinterpretColor(SDL_GPUTexture *source, SDL_GPUTexture *destination,
-                          uint32_t width, uint32_t height, bool destination16,
+                          uint32_t width, uint32_t height, bool destination16, uint32_t scale,
                           std::string &error);
 
     // Builds an 8-bit indexed texture from the CT32 target holding its bytes,
