@@ -222,6 +222,28 @@ int main(int argc, char **argv) try {
             backend->ConsumeLocalToHostBytes(destination.data(), count); break;
         }
         case GsTraceOp::Present: {
+            // DQ8_GS_REPLAY_DUMP_TARGET=base,fbw,psm,width,height writes that
+            // buffer, as GS memory holds it, at every present: a buffer's
+            // animation over the trace without a probe per frame.
+            if (const char *dump = std::getenv("DQ8_GS_REPLAY_DUMP_TARGET")) {
+                unsigned base = 0, bw = 0, psm = 0, w = 0, h = 0;
+                if (std::sscanf(dump, "%x,%u,%x,%u,%u", &base, &bw, &psm, &w, &h) == 5) {
+                    std::vector<uint8_t> snapshot;
+                    backend->SnapshotVram(snapshot);
+                    GsVram pixels;
+                    pixels.attach(snapshot.data(), static_cast<uint32_t>(snapshot.size()));
+                    FrameImage image;
+                    image.resize(w, h);
+                    for (uint32_t y = 0u; y < h; ++y)
+                        for (uint32_t x = 0u; x < w; ++x) {
+                            const uint32_t value = pixels.read(psm, base, bw, x, y);
+                            std::memcpy(image.rgba.data() + (static_cast<size_t>(y) * w + x) * 4u, &value, 4u);
+                            image.rgba[(static_cast<size_t>(y) * w + x) * 4u + 3u] = 255u;
+                        }
+                    if (!writePng(std::string(argv[3]) + "-target-" + std::to_string(frames + 1) + ".png", image, error))
+                        throw std::runtime_error(error);
+                }
+            }
             const auto frame = backend->Present(decode<GSPresentationRequest>(data));
             seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
             if (!frame.HasHostPixels()) throw std::runtime_error("No host frame");
