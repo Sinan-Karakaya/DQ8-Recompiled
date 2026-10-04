@@ -118,6 +118,27 @@ int main(int argc, char **argv) try {
             }
             if (draws < skipFirst || draws > skipLast)
                 backend->Submit(batch);
+            // DQ8_GS_REPLAY_DUMP_DST=base: after each draw into a target at
+            // that block address, write it (one file per frame, last draw wins).
+            if (const char *dst = std::getenv("DQ8_GS_REPLAY_DUMP_DST");
+                dst && (batch.state.context.frame.fbp << 5u) == std::strtoul(dst, nullptr, 16)) {
+                std::vector<uint8_t> snapshot;
+                backend->SnapshotVram(snapshot);
+                GsVram pixels;
+                pixels.attach(snapshot.data(), static_cast<uint32_t>(snapshot.size()));
+                const auto &f = batch.state.context.frame;
+                const uint32_t w = f.fbw * 64u, h = batch.state.context.scissor.y1 + 1u;
+                FrameImage image;
+                image.resize(w, h);
+                for (uint32_t y = 0u; y < h; ++y)
+                    for (uint32_t x = 0u; x < w; ++x) {
+                        const uint32_t value = pixels.read(f.psm, f.fbp << 5u, f.fbw, x, y);
+                        std::memcpy(image.rgba.data() + (static_cast<size_t>(y) * w + x) * 4u, &value, 4u);
+                        image.rgba[(static_cast<size_t>(y) * w + x) * 4u + 3u] = 255u;
+                    }
+                if (!writePng(std::string(argv[3]) + "-dst-" + std::to_string(frames) + ".png", image, error))
+                    throw std::runtime_error(error);
+            }
             if (draws == probeDraw) {
                 std::vector<uint8_t> snapshot;
                 backend->SnapshotVram(snapshot);
