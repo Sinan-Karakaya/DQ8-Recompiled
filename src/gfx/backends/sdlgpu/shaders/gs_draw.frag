@@ -161,7 +161,14 @@ vec4 sampleTexture() {
     }
 
     // Bilinear about the texel centre, matching the GS's half-texel offset.
-    const vec2 base = texel - 0.5;
+    vec2 base = texel - 0.5;
+    // The GS weighs the four texels with 4 fractional bits. Copies through a
+    // reinterpreted format depend on that: DQ8 moves a shadow mask into
+    // alpha by copying CT16 halves with coordinates that drift by up to 1/16
+    // texel, and a float weight of a few percent on the next row flips the
+    // 1-bit alpha it carries. UV (2D) draws only; 3D keeps full precision.
+    if ((params.control.x & FLAG_FST) != 0u)
+        base = floor(base * 16.0 + 0.002) / 16.0;
     const vec2 fraction = fract(base);
     const ivec2 corner = ivec2(floor(base));
     const vec4 c00 = fetchTexel(corner);
