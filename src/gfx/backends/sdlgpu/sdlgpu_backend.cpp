@@ -358,7 +358,7 @@ bool canSnapshotFeedback(const GSPrimitiveBatch &batch, const GsSurface &surface
     if (samplesFitSurface(batch, surface)) return true;
     GsRegion taps;
     samplesFitSurface(batch, surface, &taps);
-    if (taps.empty() || surface.scale != 1u || taps.x1 > surface.width + 1u ||
+    if (taps.empty() || taps.x1 > surface.width + 1u ||
         taps.y1 > surface.height + 1u) return false;
     const bool rightColumn = taps.x1 > surface.width;
     const bool bottomRow = taps.y1 > surface.height;
@@ -793,14 +793,17 @@ struct SdlGpuBackend::Impl {
                                      const FeedbackPadding &padding, CommandBuffer &ownedCommands) {
         if (!flushDraws() || !targets->refresh(surface, error))
             return nullptr;
-        const uint32_t sourceWidth = surface.width * surface.scale;
-        const uint32_t sourceHeight = surface.height * surface.scale;
+        // Padding regions are in GS pixels; an upscaled snapshot holds each
+        // of them as a scale x scale block, like the target's own pixels.
+        const uint32_t scale = std::max(surface.scale, 1u);
+        const uint32_t sourceWidth = surface.width * scale;
+        const uint32_t sourceHeight = surface.height * scale;
         uint32_t width = sourceWidth, height = sourceHeight, uploadBytes = 0u;
         GsPageSet tailPages;
         for (const auto &region : padding.uploads) {
-            width = std::max(width, region.x1);
-            height = std::max(height, region.y1);
-            uploadBytes += (region.width() * region.height() * 4u + 255u) & ~255u;
+            width = std::max(width, region.x1 * scale);
+            height = std::max(height, region.y1 * scale);
+            uploadBytes += (region.width() * region.height() * scale * scale * 4u + 255u) & ~255u;
             gsMarkPages(tailPages, surface.base, surface.bufferWidth, surface.psm,
                         region.width(), region.height(), region.x0, region.y0);
         }
@@ -826,7 +829,9 @@ struct SdlGpuBackend::Impl {
             uint32_t offset = 0u;
             for (const auto &region : padding.uploads) {
                 auto *pixels = reinterpret_cast<uint32_t *>(mapped + offset);
+                const uint32_t rowPixels = region.width() * scale;
                 for (uint32_t y = region.y0; y < region.y1; ++y) {
+                    uint32_t *row = pixels + static_cast<size_t>(y - region.y0) * scale * rowPixels;
                     for (uint32_t x = region.x0; x < region.x1; ++x) {
                         uint32_t color = vram.read(surface.psm, surface.base, surface.bufferWidth, x, y);
                         if (surface.psm != GS_PSM_CT32) {
@@ -834,10 +839,13 @@ struct SdlGpuBackend::Impl {
                             color = ((r << 3u) | (r >> 2u)) | (((g << 3u) | (g >> 2u)) << 8u) |
                                     (((b << 3u) | (b >> 2u)) << 16u) | ((color & 0x8000u) << 16u);
                         }
-                        *pixels++ = color;
+                        for (uint32_t sx = 0u; sx < scale; ++sx)
+                            row[(x - region.x0) * scale + sx] = color;
                     }
+                    for (uint32_t sy = 1u; sy < scale; ++sy)
+                        std::memcpy(row + static_cast<size_t>(sy) * rowPixels, row, rowPixels * 4u);
                 }
-                offset += (region.width() * region.height() * 4u + 255u) & ~255u;
+                offset += (region.width() * region.height() * scale * scale * 4u + 255u) & ~255u;
             }
             SDL_UnmapGPUTransferBuffer(device.handle(), upload.get());
         }
@@ -860,10 +868,10 @@ struct SdlGpuBackend::Impl {
         destination.texture = feedbackTexture;
         // Cycle the complete snapshot so submitted draws retain their version.
         SDL_CopyGPUTextureToTexture(copy, &source, &destination, sourceWidth, sourceHeight, 1u, true);
-        if (padding.rightColumn && sourceHeight > 32u) {
-            source.y = 32u;
+        if (padding.rightColumn && sourceHeight > 32u * scale) {
+            source.y = 32u * scale;
             destination.x = sourceWidth;
-            SDL_CopyGPUTextureToTexture(copy, &source, &destination, 1u, sourceHeight - 32u, 1u, false);
+            SDL_CopyGPUTextureToTexture(copy, &source, &destination, scale, sourceHeight - 32u * scale, 1u, false);
         }
         if (upload) {
             uint32_t offset = 0u;
@@ -872,18 +880,18 @@ struct SdlGpuBackend::Impl {
                 SDL_GPUTextureTransferInfo from{};
                 from.transfer_buffer = upload.get();
                 from.offset = offset;
-                from.pixels_per_row = region.width();
-                from.rows_per_layer = region.height();
+                from.pixels_per_row = region.width() * scale;
+                from.rows_per_layer = region.height() * scale;
                 SDL_GPUTextureRegion to{};
                 to.texture = feedbackTexture;
-                to.x = region.x0;
-                to.y = region.y0;
-                to.w = region.width();
-                to.h = region.height();
+                to.x = region.x0 * scale;
+                to.y = region.y0 * scale;
+                to.w = region.width() * scale;
+                to.h = region.height() * scale;
                 to.d = 1u;
                 // The preceding copy already cycled the snapshot's storage.
                 SDL_UploadToGPUTexture(copy, &from, &to, false);
-                offset += (region.width() * region.height() * 4u + 255u) & ~255u;
+                offset += (region.width() * region.height() * scale * scale * 4u + 255u) & ~255u;
             }
         }
         SDL_EndGPUCopyPass(copy);
