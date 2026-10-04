@@ -111,8 +111,8 @@ int main(int argc, char **argv) try {
                     c.zbuf.psm, c.zbuf.zmask);
                 for (unsigned i = 0; i < batch.vertexCount; ++i) {
                     const auto &v = batch.vertices[i];
-                    std::printf("  xy=%.4f,%.4f z=%.0f uv=%u,%u stq=%.5g,%.5g,%.5g rgba=%u,%u,%u,%u\n",
-                        v.x - c.xyoffset.ofx / 16.0f, v.y - c.xyoffset.ofy / 16.0f,
+                    std::printf("  xy=%.4f,%.4f raw=%.4f,%.4f z=%.0f uv=%u,%u stq=%.5g,%.5g,%.5g rgba=%u,%u,%u,%u\n",
+                        v.x - c.xyoffset.ofx / 16.0f, v.y - c.xyoffset.ofy / 16.0f, v.x, v.y,
                         double(v.z), v.u, v.v, v.s, v.t, v.q, v.r, v.g, v.b, v.a);
                 }
             }
@@ -146,6 +146,38 @@ int main(int argc, char **argv) try {
                 if (!writePng(std::string(argv[3]) + "-probe-color.png", color, error) ||
                     !writePng(std::string(argv[3]) + "-probe-alpha.png", alpha, error))
                     throw std::runtime_error(error);
+                // DQ8_GS_TRACE_PROBE_TEXTURE=1: the draw's texture as GS memory
+                // holds it before the draw, raw values (an index for T8/T4).
+                if (std::getenv("DQ8_GS_TRACE_PROBE_TEXTURE") && batch.state.prim.tme) {
+                    const auto &tex = context.tex0;
+                    FrameImage raw, rawAlpha;
+                    raw.resize(1u << tex.tw, 1u << tex.th);
+                    rawAlpha.resize(raw.width, raw.height);
+                    for (uint32_t y = 0u; y < raw.height; ++y)
+                        for (uint32_t x = 0u; x < raw.width; ++x) {
+                            const uint32_t value = pixels.read(tex.psm, tex.tbp0, tex.tbw, x, y);
+                            const size_t offset = (static_cast<size_t>(y) * raw.width + x) * 4u;
+                            raw.rgba[offset] = static_cast<uint8_t>(value);
+                            raw.rgba[offset + 1u] = static_cast<uint8_t>(value >> 8u);
+                            raw.rgba[offset + 2u] = static_cast<uint8_t>(value >> 16u);
+                            raw.rgba[offset + 3u] = 255u;
+                            std::memset(rawAlpha.rgba.data() + offset, static_cast<uint8_t>(value >> 24u), 3u);
+                            rawAlpha.rgba[offset + 3u] = 255u;
+                        }
+                    if (!writePng(std::string(argv[3]) + "-probe-texture.png", raw, error) ||
+                        !writePng(std::string(argv[3]) + "-probe-texture-alpha.png", rawAlpha, error))
+                        throw std::runtime_error(error);
+                    // And the 256-entry CLUT (CSM1, CT32 or CT16) as a 16x16 image.
+                    FrameImage clut;
+                    clut.resize(16u, 16u);
+                    for (uint32_t i = 0u; i < 256u; ++i) {
+                        const uint32_t cx = (i & 7u) | ((i & 0x10u) >> 1u), cy = ((i >> 5u) << 1u) | ((i >> 3u) & 1u);
+                        const uint32_t value = pixels.read(tex.cpsm, tex.cbp, 1u, cx, cy);
+                        std::memcpy(clut.rgba.data() + i * 4u, &value, 4u);
+                    }
+                    if (!writePng(std::string(argv[3]) + "-probe-clut.png", clut, error))
+                        throw std::runtime_error(error);
+                }
                 std::printf("Probed draw=%llu target=%x/%u/%u\n", static_cast<unsigned long long>(draws),
                             context.frame.fbp << 5u, context.frame.fbw, context.frame.psm);
                 return 0;
