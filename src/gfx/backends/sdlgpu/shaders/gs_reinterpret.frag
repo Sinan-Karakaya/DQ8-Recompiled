@@ -2,12 +2,18 @@
 
 layout(set = 2, binding = 0) uniform sampler2D sourceTexture;
 layout(set = 3, binding = 0) uniform ReinterpretParams {
-    uvec4 control; // x: destination is CT16
+    uvec4 control; // x: destination is CT16, y: resolution scale (0 or 1 = native)
 } params;
 layout(location = 0) out vec4 outColor;
 
+// An upscaled target is reinterpreted one sub-sample plane at a time: GS
+// pixel p of the destination takes sample `sub` of the source pixel holding
+// its bytes, so a CT32 -> CT16 -> CT32 round trip keeps every sample exact.
+uint g_scale;
+uvec2 g_sub;
+
 uvec4 fetchBytes(uvec2 position) {
-    return uvec4(round(texelFetch(sourceTexture, ivec2(position), 0) * 255.0));
+    return uvec4(round(texelFetch(sourceTexture, ivec2(position * g_scale + g_sub), 0) * 255.0));
 }
 
 uint pack16(uvec4 color) {
@@ -16,7 +22,10 @@ uint pack16(uvec4 color) {
 }
 
 void main() {
-    uvec2 p = uvec2(gl_FragCoord.xy);
+    g_scale = max(params.control.y, 1u);
+    uvec2 physical = uvec2(gl_FragCoord.xy);
+    uvec2 p = physical / g_scale;
+    g_sub = physical % g_scale;
     uvec4 result;
     if (params.control.x != 0u) {
         // CT16's x bit 3 selects a halfword. Its remaining page bits are

@@ -90,6 +90,11 @@ int wrapAxis(int texel, uint mode, int size, int regionMin, int regionMax) {
 // the result scaled afterwards. `subTexel` selects a point inside the GS texel
 // when the bound texture holds several physical texels per GS one, which is
 // what keeps a render target's extra detail instead of averaging it away.
+// For a native-grid draw from an upscaled source at the target's own scale:
+// the sub-sample plane this fragment writes, so a bit-exact copy keeps each
+// plane separate. Negative when unused.
+vec2 g_plane = vec2(-1.0);
+
 vec4 fetchTexelAt(ivec2 texel, vec2 subTexel) {
     const ivec2 size = ivec2(params.textureSize.xy);
     const uint wrapU = params.control.w & 3u;
@@ -102,7 +107,8 @@ vec4 fetchTexelAt(ivec2 texel, vec2 subTexel) {
     const int scale = max(int(params.misc.y), 1);
     ivec2 physical = wrapped * scale;
     if (scale > 1)
-        physical += ivec2(clamp(subTexel, vec2(0.0), vec2(0.999)) * float(scale));
+        physical += g_plane.x >= 0.0 ? ivec2(g_plane)
+                                     : ivec2(clamp(subTexel, vec2(0.0), vec2(0.999)) * float(scale));
     vec4 color = texelFetch(gsTexture, clamp(physical, ivec2(0), size * scale - 1), 0);
     const uint format = uint(params.misc.z);
     if (format != 0u) {
@@ -153,6 +159,8 @@ vec4 sampleTexture() {
         const vec2 host = gl_FragCoord.xy;
         const vec2 offset = floor(host / scale) * scale + 0.5 - host;
         texel += dFdx(texel) * offset.x + dFdy(texel) * offset.y;
+        if (int(params.misc.y) == int(scale))
+            g_plane = mod(floor(host), scale);
     }
 
     if ((params.control.x & FLAG_LINEAR) == 0u) {

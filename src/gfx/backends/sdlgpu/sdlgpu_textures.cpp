@@ -700,7 +700,7 @@ bool GsTextureCache::expandFromTarget(const GsTextureKey &key, Entry &entry, GsR
         return true;
     GsPageSet texelPages;
     markTexelPages(key, texelPages);
-    GsSurface *target = m_targets.nativeOwner(texelPages);
+    GsSurface *target = m_targets.nativeOwner(texelPages, true);
     if (!target)
         return true;
 
@@ -735,7 +735,8 @@ bool GsTextureCache::expandFromTarget(const GsTextureKey &key, Entry &entry, GsR
 
     const SDL_Rect rect{int(region.x0), int(region.y0), int(region.width()), int(region.height())};
     const std::array<uint32_t, 4> pages{key.tbp0 >> 5u, std::max<uint32_t>(key.tbw >> 1u, 1u),
-                                        target->base >> 5u, target->bufferWidth};
+                                        target->base >> 5u,
+                                        target->bufferWidth | (std::max(target->scale, 1u) << 16u)};
     if (!m_device.expandIndexed8(target->texture, m_clutRgba.data(), entry.texture, key.width,
                                  key.height, rect, pages, error))
         return false;

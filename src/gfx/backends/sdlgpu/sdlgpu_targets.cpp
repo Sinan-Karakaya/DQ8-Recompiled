@@ -419,15 +419,17 @@ void GsTargetCache::invalidate(const GsPageSet &pages, bool preserveOwned) {
 namespace {
 // Whole CT32 pages at scale 1: each GS page is one 64x32 cell of the surface,
 // so host writes can be patched in and uploads done page by page.
-bool nativeCt32(const GsSurface &surface) {
-    return surface.psm == GS_PSM_CT32 && surface.scale == 1u && (surface.base & 31u) == 0u &&
+// A CT32 target covering whole pages, which GS page maths can address.
+// `anyScale` accepts an upscaled one too.
+bool nativeCt32(const GsSurface &surface, bool anyScale = false) {
+    return surface.psm == GS_PSM_CT32 && (anyScale || surface.scale == 1u) && (surface.base & 31u) == 0u &&
            surface.width == surface.bufferWidth * 64u &&
            surface.pages.count() == surface.bufferWidth * ((surface.height + 31u) / 32u) &&
            !surface.undefined;
 }
 }
 
-GsSurface *GsTargetCache::nativeOwner(const GsPageSet &pages) {
+GsSurface *GsTargetCache::nativeOwner(const GsPageSet &pages, bool allowScaled) {
     GsSurface *owner = nullptr;
     for (auto &candidate : m_surfaces) {
         GsSurface &surface = *candidate;
@@ -437,7 +439,7 @@ GsSurface *GsTargetCache::nativeOwner(const GsPageSet &pages) {
             return nullptr;
         owner = &surface;
     }
-    if (!owner || !nativeCt32(*owner) || (pages & ~owner->pages).any())
+    if (!owner || !nativeCt32(*owner, allowScaled) || (pages & ~owner->pages).any())
         return nullptr;
     return owner;
 }
@@ -810,7 +812,7 @@ bool GsTargetCache::prepareColorView(GsSurface &surface, std::string &error) {
         const bool to32 = source.psm == GS_PSM_CT16 && surface.psm == GS_PSM_CT32;
         const uint32_t height32 = to16 ? source.height : surface.height;
         const uint32_t height16 = to16 ? surface.height : source.height;
-        if ((to16 || to32) && source.scale == 1u && surface.scale == 1u &&
+        if ((to16 || to32) && source.scale == surface.scale &&
             source.base == surface.base && (source.base & 31u) == 0u &&
             source.bufferWidth == surface.bufferWidth && source.width == surface.width &&
             source.width == source.bufferWidth * 64u && height32 % 32u == 0u &&
@@ -823,7 +825,7 @@ bool GsTargetCache::prepareColorView(GsSurface &surface, std::string &error) {
             // view over the new format's draws. Mixed owners retain readback.
             if (!applyCpuPatches(source, error) ||
                 !m_device.reinterpretColor(source.texture, surface.texture,
-                                           surface.width, surface.height, to16, error))
+                                           surface.width, surface.height, to16, surface.scale, error))
                 return false;
             source.gpuDirty.clear();
             source.ownedPages.reset();

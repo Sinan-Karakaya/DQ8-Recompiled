@@ -295,7 +295,7 @@ std::string SdlGpuDevice::driverName() const {
 }
 
 bool SdlGpuDevice::reinterpretColor(SDL_GPUTexture *source, SDL_GPUTexture *destination,
-                                    uint32_t width, uint32_t height, bool destination16,
+                                    uint32_t width, uint32_t height, bool destination16, uint32_t scale,
                                     std::string &error) {
     if (!m_reinterpretPipeline) {
         SDL_GPUShaderCreateInfo vertexInfo{};
@@ -371,11 +371,12 @@ bool SdlGpuDevice::reinterpretColor(SDL_GPUTexture *source, SDL_GPUTexture *dest
         return false;
     }
     SDL_BindGPUGraphicsPipeline(pass, m_reinterpretPipeline);
-    SDL_GPUViewport viewport{0.0f, 0.0f, float(width), float(height), 0.0f, 1.0f};
+    scale = std::max(scale, 1u);
+    SDL_GPUViewport viewport{0.0f, 0.0f, float(width * scale), float(height * scale), 0.0f, 1.0f};
     SDL_SetGPUViewport(pass, &viewport);
     SDL_GPUTextureSamplerBinding binding{source, m_sampler};
     SDL_BindGPUFragmentSamplers(pass, 0u, &binding, 1u);
-    const uint32_t control[4] = {uint32_t(destination16), 0u, 0u, 0u};
+    const uint32_t control[4] = {uint32_t(destination16), scale, 0u, 0u};
     SDL_PushGPUFragmentUniformData(commands, 0u, control, sizeof(control));
     SDL_DrawGPUPrimitives(pass, 3u, 1u, 0u, 0u);
     SDL_EndGPURenderPass(pass);
