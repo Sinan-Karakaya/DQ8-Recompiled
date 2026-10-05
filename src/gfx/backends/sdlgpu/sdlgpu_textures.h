@@ -192,6 +192,11 @@ private:
     GsVram &m_vram;
     GsTargetCache &m_targets;
     std::unordered_map<GsTextureKey, Entry, GsTextureKeyHash> m_entries;
+    // sourcePagesFor's last answer: consecutive draws nearly always share a
+    // texture, and the page walk runs twice for each of them.
+    mutable GsTextureKey m_lastSourceKey{};
+    mutable GsPageSet m_lastSourcePages{};
+    mutable bool m_lastSourceValid = false;
     std::vector<uint8_t> m_staging;
     // Expand scratch: raw texels for one row (indices for indexed PSMs, whole
     // words when the indices ride inside a 32-bit layout), and the palette
