@@ -2,15 +2,19 @@
 
 // In-game settings menu for the SDL GPU backend, drawn with Dear ImGui over
 // the presented frame. F1 (or a controller's Guide button, or Back+Start)
-// opens it; while it is open the game sees no input.
+// opens it; while it is open the game sees no input. F2 opens the test menu,
+// which jumps to the game's events, story points and places.
 //
 // Everything here runs on the presenting thread: SDL events, ImGui frames and
 // the command buffer the frame is shown with.
 
 #include <SDL3/SDL.h>
 
+#include "gfx/test_menu.h"
+
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <string>
 
 namespace dq8::gfx {
@@ -61,9 +65,9 @@ public:
     // Feeds the event to the menu. Returns true when it belongs to the menu
     // and must not reach the game.
     bool handleEvent(const SDL_Event &event);
-    bool isOpen() const { return m_open; }
-    // Whether anything is drawn this frame (the menu or the FPS counter).
-    bool visible() const { return m_initialized && (m_open || m_settings.showFps); }
+    bool isOpen() const { return m_open || m_testOpen; }
+    // Whether anything is drawn this frame (a menu or the FPS counter).
+    bool visible() const { return m_initialized && (isOpen() || m_settings.showFps); }
 
     // Records the menu into `commands`, over `target`, which already holds the
     // frame. `rendersPerSecond` is the game's own frame rate, for the counter.
@@ -75,6 +79,9 @@ public:
     void setGameWidescreenQuery(std::function<int()> query) { m_gameWidescreen = std::move(query); }
     int gameWidescreen() const { return m_gameWidescreen ? m_gameWidescreen() : -1; }
 
+    // What the test menu (F2) lists; until it is set, F2 says it is loading.
+    void setTestMenu(std::shared_ptr<const TestMenuData> data) { m_test = std::move(data); }
+
     DisplaySettings &settings() { return m_settings; }
     const DisplaySettings &settings() const { return m_settings; }
 
@@ -85,6 +92,7 @@ private:
     void toggle();
     void drawMenu(uint32_t activeScale);
     void drawFps(double rendersPerSecond);
+    void drawTestMenu();
     void commit();
 
     SDL_Window *m_window = nullptr;
@@ -97,6 +105,14 @@ private:
     bool m_backHeld = false;
     std::string m_iniPath;
     std::function<int()> m_gameWidescreen;
+
+    std::shared_ptr<const TestMenuData> m_test;
+    bool m_testOpen = false;
+    bool m_testJustOpened = false;
+    bool m_testStoryFirst = true;
+    char m_testFilter[64] = {};
+    char m_testMap[16] = "m01";
+    int m_testProgram = 100;
 };
 
 } // namespace dq8::gfx

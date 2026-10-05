@@ -20,6 +20,7 @@
 #include "runtime/gs/gs_frontend.h"
 #include "runtime/gs/gs_threaded_backend.h"
 #include "vu_bounds.h"
+#include "game_jump.h"
 #include "../../tools/runtime/render_cadence.h"
 
 #if defined(DQ8_HAS_SDLGPU)
@@ -366,6 +367,18 @@ int main(int argc, char **argv)
 #else
     dq8::diagnostics::configureRenderCadenceProbe(runtime);
 #endif
+    // The test menu (F2) and DQ8_DEBUG_STORY / DQ8_DEBUG_WARP. Its lists come
+    // from the DATA archive next to the ELF.
+    dq8::GameJump gameJump(runtime);
+#if defined(DQ8_HAS_SDLGPU)
+    if (sdlWindowBackend != nullptr)
+    {
+        const size_t slash = elfPath.find_last_of("/\\");
+        const std::string gameDir = slash == std::string::npos ? std::string(".") : elfPath.substr(0, slash);
+        sdlWindowBackend->setTestMenu(gameJump.buildTestMenu(gameDir + "/DATA"));
+    }
+#endif
+    gameJump.startEnvironmentTriggers();
     runtime.run();
 
     std::printf("[dq8] PS2Runtime::run() returned\n");

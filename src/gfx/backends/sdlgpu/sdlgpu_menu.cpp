@@ -5,6 +5,7 @@
 #include "imgui_impl_sdlgpu3.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -188,9 +189,14 @@ bool SdlGpuMenu::handleEvent(const SDL_Event &event) {
     switch (event.type) {
     case SDL_EVENT_KEY_DOWN:
         if (event.key.repeat)
-            return m_open;
+            return isOpen();
         if (event.key.scancode == SDL_SCANCODE_F1) {
             toggle();
+            return true;
+        }
+        if (event.key.scancode == SDL_SCANCODE_F2) {
+            m_testOpen = !m_testOpen;
+            m_testJustOpened = m_testOpen;
             return true;
         }
         if (event.key.scancode == SDL_SCANCODE_F11) {
@@ -198,11 +204,12 @@ bool SdlGpuMenu::handleEvent(const SDL_Event &event) {
             commit();
             return true;
         }
-        if (m_open && event.key.scancode == SDL_SCANCODE_ESCAPE) {
+        if (isOpen() && event.key.scancode == SDL_SCANCODE_ESCAPE) {
             m_open = false;
+            m_testOpen = false;
             return true;
         }
-        return m_open;
+        return isOpen();
     case SDL_EVENT_KEY_UP:
     case SDL_EVENT_TEXT_INPUT:
     case SDL_EVENT_MOUSE_MOTION:
@@ -210,7 +217,7 @@ bool SdlGpuMenu::handleEvent(const SDL_Event &event) {
     case SDL_EVENT_MOUSE_BUTTON_UP:
     case SDL_EVENT_MOUSE_WHEEL:
     case SDL_EVENT_GAMEPAD_AXIS_MOTION:
-        return m_open;
+        return isOpen();
     case SDL_EVENT_GAMEPAD_BUTTON_DOWN:
         if (event.gbutton.button == SDL_GAMEPAD_BUTTON_BACK)
             m_backHeld = true;
@@ -219,11 +226,11 @@ bool SdlGpuMenu::handleEvent(const SDL_Event &event) {
             toggle();
             return true;
         }
-        return m_open;
+        return isOpen();
     case SDL_EVENT_GAMEPAD_BUTTON_UP:
         if (event.gbutton.button == SDL_GAMEPAD_BUTTON_BACK)
             m_backHeld = false;
-        return m_open;
+        return isOpen();
     default:
         return false;
     }
@@ -325,6 +332,159 @@ void SdlGpuMenu::drawMenu(uint32_t activeScale) {
         commit();
 }
 
+namespace {
+
+// Case-insensitive: does `text` contain `filter`?
+bool matchesFilter(const std::string &text, const char *filter) {
+    if (!filter[0])
+        return true;
+    const std::string needle = filter;
+    return std::search(text.begin(), text.end(), needle.begin(), needle.end(), [](char a, char b) {
+               return std::tolower(static_cast<unsigned char>(a)) == std::tolower(static_cast<unsigned char>(b));
+           }) != text.end();
+}
+
+} // namespace
+
+void SdlGpuMenu::drawTestMenu() {
+    const ImGuiViewport *viewport = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(viewport->GetCenter(), ImGuiCond_Always, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(viewport->Size.x * 0.8f, viewport->Size.y * 0.85f), ImGuiCond_Always);
+    ImGui::SetNextWindowBgAlpha(0.94f);
+    if (m_testJustOpened)
+        ImGui::SetNextWindowFocus();
+    m_testJustOpened = false;
+    if (!ImGui::Begin("Test menu: events, story points, places (F2)", &m_testOpen,
+                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
+                          ImGuiWindowFlags_NoSavedSettings)) {
+        ImGui::End();
+        return;
+    }
+    const std::shared_ptr<const TestMenuData> data = m_test;
+    if (!data) {
+        ImGui::TextUnformatted("Reading the game's debug lists...");
+        ImGui::End();
+        return;
+    }
+    ImGui::TextDisabled("For testing: this changes the game's progress. Don't save over a real adventure log after using it.");
+    ImGui::TextDisabled("Use it while walking around (not in a battle, a menu or a conversation).");
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 20.0f);
+    ImGui::InputTextWithHint("##filter", "Filter (name, number or map)", m_testFilter, sizeof(m_testFilter));
+
+    // Each action closes the menu, so the game goes on to it at once.
+    bool acted = false;
+    if (ImGui::BeginTabBar("##test")) {
+        if (ImGui::BeginTabItem("Events")) {
+            ImGui::Checkbox("First put the story at the start of the event's chapter", &m_testStoryFirst);
+            ImGui::TextDisabled("Entries marked [setup] put the game in the state the events after them expect.");
+            if (ImGui::BeginTable("##events", 4,
+                                  ImGuiTableFlags_ScrollY | ImGuiTableFlags_RowBg | ImGuiTableFlags_BordersInnerV,
+                                  ImVec2(0.0f, ImGui::GetContentRegionAvail().y))) {
+                ImGui::TableSetupScrollFreeze(0, 1);
+                ImGui::TableSetupColumn("", ImGuiTableColumnFlags_WidthFixed);
+                ImGui::TableSetupColumn("Chapter / no.", ImGuiTableColumnFlags_WidthFixed);
+                ImGui::TableSetupColumn("Event", ImGuiTableColumnFlags_WidthStretch);
+                ImGui::TableSetupColumn("Map / entry", ImGuiTableColumnFlags_WidthFixed);
+                ImGui::TableHeadersRow();
+                for (size_t i = 0; i < data->events.size() && !acted; ++i) {
+                    const TestMenuData::Event &event = data->events[i];
+                    if (!matchesFilter(event.name, m_testFilter) && !matchesFilter(event.number, m_testFilter) &&
+                        !matchesFilter(event.map, m_testFilter))
+                        continue;
+                    ImGui::PushID(static_cast<int>(i));
+                    ImGui::TableNextRow();
+                    ImGui::TableNextColumn();
+                    if (ImGui::SmallButton("Play")) {
+                        if (m_testStoryFirst && data->setStory)
+                            for (const TestMenuData::StoryPoint &point : data->storyPoints)
+                                if (point.chapter == event.chapter) {
+                                    data->setStory(point.chapter, point.step);
+                                    break;
+                                }
+                        if (data->warp)
+                            data->warp(event.map, event.program);
+                        acted = true;
+                    }
+                    ImGui::TableNextColumn();
+                    ImGui::Text("%2d  %s", event.chapter, event.number.c_str());
+                    ImGui::TableNextColumn();
+                    if (event.setup)
+                        ImGui::TextColored(ImVec4(0.6f, 0.8f, 1.0f, 1.0f), "[setup] %s", event.name.c_str());
+                    else
+                        ImGui::TextUnformatted(event.name.c_str());
+                    ImGui::TableNextColumn();
+                    ImGui::TextDisabled("%s %d", event.map.c_str(), event.program);
+                    ImGui::PopID();
+                }
+                ImGui::EndTable();
+            }
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Story points")) {
+            ImGui::TextDisabled("Sets the story's progress as the game does on reaching that point; it takes effect"
+                                " on the next map you enter.");
+            if (ImGui::BeginChild("##story", ImVec2(0.0f, 0.0f))) {
+                for (size_t i = 0; i < data->storyPoints.size() && !acted; ++i) {
+                    const TestMenuData::StoryPoint &point = data->storyPoints[i];
+                    if (!matchesFilter(point.name, m_testFilter))
+                        continue;
+                    ImGui::PushID(static_cast<int>(i));
+                    if (ImGui::SmallButton("Set") && data->setStory) {
+                        data->setStory(point.chapter, point.step);
+                        acted = true;
+                    }
+                    ImGui::SameLine();
+                    ImGui::Text("%2d-%-2d  %s", point.chapter, point.step, point.name.c_str());
+                    ImGui::PopID();
+                }
+            }
+            ImGui::EndChild();
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Places")) {
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6.0f);
+            ImGui::InputText("Map", m_testMap, sizeof(m_testMap));
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8.0f);
+            ImGui::InputInt("Entry", &m_testProgram);
+            ImGui::SameLine();
+            const bool known = !data->hasMap || data->hasMap(m_testMap);
+            ImGui::BeginDisabled(!known);
+            if (ImGui::Button("Go") && data->warp) {
+                data->warp(m_testMap, m_testProgram);
+                acted = true;
+            }
+            ImGui::EndDisabled();
+            if (!known)
+                ImGui::TextDisabled("No map called \"%s\".", m_testMap);
+            ImGui::TextDisabled("Entry 100 arrives the usual way; an entry the map's script lacks can hang the game.");
+            if (ImGui::BeginChild("##places", ImVec2(0.0f, 0.0f))) {
+                for (size_t i = 0; i < data->places.size() && !acted; ++i) {
+                    const TestMenuData::Place &place = data->places[i];
+                    if (!matchesFilter(place.name, m_testFilter) && !matchesFilter(place.map, m_testFilter))
+                        continue;
+                    ImGui::PushID(static_cast<int>(i));
+                    if (ImGui::SmallButton("Go") && data->warp) {
+                        data->warp(place.map, 100);
+                        acted = true;
+                    }
+                    ImGui::SameLine();
+                    ImGui::Text("%s", place.name.c_str());
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("(%s)", place.map.c_str());
+                    ImGui::PopID();
+                }
+            }
+            ImGui::EndChild();
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
+    ImGui::End();
+    if (acted)
+        m_testOpen = false;
+}
+
 void SdlGpuMenu::drawFps(double rendersPerSecond) {
     ImGui::SetNextWindowPos(ImVec2(8.0f, 8.0f), ImGuiCond_Always);
     ImGui::SetNextWindowBgAlpha(0.5f);
@@ -365,6 +525,8 @@ void SdlGpuMenu::render(SDL_GPUCommandBuffer *commands, SDL_GPUTexture *target,
     ImGui::NewFrame();
     if (m_open)
         drawMenu(activeScale);
+    if (m_testOpen)
+        drawTestMenu();
     if (m_settings.showFps)
         drawFps(rendersPerSecond);
     ImGui::Render();

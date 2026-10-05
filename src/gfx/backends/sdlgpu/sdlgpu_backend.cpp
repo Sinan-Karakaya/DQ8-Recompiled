@@ -3258,6 +3258,11 @@ void SdlGpuBackend::setGameWidescreenQuery(std::function<int()> query) {
     m_impl->menu.setGameWidescreenQuery(std::move(query));
 }
 
+void SdlGpuBackend::setTestMenu(std::shared_ptr<const TestMenuData> data) {
+    std::lock_guard lock(m_impl->mutex);
+    m_impl->menu.setTestMenu(std::move(data));
+}
+
 bool SdlGpuBackend::hasWindow() const {
     std::lock_guard lock(m_impl->mutex);
     return m_impl->window != nullptr;

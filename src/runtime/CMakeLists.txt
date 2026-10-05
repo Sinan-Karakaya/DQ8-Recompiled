@@ -12,7 +12,7 @@ option(DQ8_LINK_OVERLAYS
     OFF)
 
 if(DQ8_LINK_GENERATED)
-    target_sources(dq8 PRIVATE vu_bounds.cpp)
+    target_sources(dq8 PRIVATE vu_bounds.cpp game_archive.cpp game_jump.cpp)
     if(NOT TARGET ps2_runtime)
         message(FATAL_ERROR
             "DQ8_LINK_GENERATED=ON but the ps2_runtime target does not exist. "
