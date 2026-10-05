@@ -22,6 +22,13 @@ namespace {
 // Handlers in the SLUS_212.07 script command table (0x395DA0).
 constexpr uint32_t kCommandSetStoryPoint = 0x1B3A30u; // command 0x588
 constexpr uint32_t kCommandChangeMap = 0x1CF3F0u;     // command 0x14
+// The field loop's mode (gp-0x76C8) and the game's setter for it. Mode 1 is
+// walking around; in mode 2 the loop runs the event script and then acts on
+// what it asked for, such as a change of map (FUN_1A2630).
+constexpr uint32_t kFieldMode = 0x3D20A8u;
+constexpr uint32_t kSetFieldMode = 0x17BB70u;
+constexpr uint32_t kFieldModeWalking = 1u;
+constexpr uint32_t kFieldModeEvent = 2u;
 // Guest memory for command arguments: a ring of slots, one per queued call,
 // each with the {type, value} pairs and then the strings they point to.
 constexpr uint32_t kBufferBytes = 16u * 1024u;
@@ -163,7 +170,14 @@ void GameJump::warp(const std::string &map, int program) {
     // do on leaving a town. An entry the map's script lacks hangs the game.
     const Arg args[3] = {{false, -1, {}}, {true, 0, map}, {false, program, {}}};
     callCommand(kCommandChangeMap, args, 3u);
-    std::fprintf(stderr, "[jump] %s, script entry %d\n", map.c_str(), program);
+    // The loop only acts on it in event mode, where a script that asked for
+    // it would be running. Walking around, put it there the way the game does
+    // when an event starts (0x33F380: entry 100 started -> mode 2).
+    uint32_t mode = 0u;
+    std::memcpy(&mode, m_runtime.memory().getRDRAM() + kFieldMode, sizeof(mode));
+    if (mode == kFieldModeWalking)
+        m_runtime.eeScheduler().requestGuestCall(kSetFieldMode, {kFieldModeEvent, 0u, 0u, 0u});
+    std::fprintf(stderr, "[jump] %s, script entry %d (field mode %u)\n", map.c_str(), program, mode);
 }
 
 std::shared_ptr<gfx::TestMenuData> GameJump::buildTestMenu(const std::string &archiveBase) {
