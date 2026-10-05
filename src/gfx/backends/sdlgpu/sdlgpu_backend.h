@@ -18,6 +18,8 @@ class SdlPadInput;
 
 struct SdlGpuStats {
     uint64_t presents = 0u;
+    // Local-to-local transfers done on the GPU, not through local memory.
+    uint64_t gpuLocalCopies = 0u;
     // Frames shown straight from a render target, with no readback or CPU
     // compose, versus ones that had to be composed on the CPU first.
     uint64_t nativePresents = 0u;

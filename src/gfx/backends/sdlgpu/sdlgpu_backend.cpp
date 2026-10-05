@@ -7,6 +7,9 @@
 #include "gfx/gs/gs_state.h"
 #include "gfx/gs/gs_transfer.h"
 #include "gfx/gs/gs_vram.h"
+#include "runtime/gs/ps2_gs_psmct16.h"
+#include "runtime/gs/ps2_gs_psmct32.h"
+#include "runtime/gs/ps2_gs_psmt8.h"
 
 #include <SDL3/SDL.h>
 
@@ -653,6 +656,118 @@ struct SdlGpuBackend::Impl {
                 return true;
         }
         return false;
+    }
+
+    // A local-to-local transfer between CT32 render targets, done on the GPU.
+    // The CPU path reads both targets back -- a stall each, and at a scale
+    // above 1 a downsample -- and DQ8 copies 8-bit texture strips inside its
+    // character layer for every frame of a dialogue close-up. The swizzle
+    // tables say which source byte lands in which destination byte; the GPU
+    // applies that per sub-sample plane. Anything else keeps the CPU path.
+    bool gpuLocalCopy(const GSTransferCommand &command) {
+        static const bool disabled = std::getenv("DQ8_GFX_CPU_LOCAL_COPY") != nullptr;
+        const GSBitBltBuf &blt = command.bitbltbuf;
+        const uint32_t psm = blt.spsm & 0x3fu;
+        if (disabled || command.direction != 2u || psm != (blt.dpsm & 0x3fu))
+            return false;
+        uint32_t bytesPerPixel = 0u;
+        switch (psm) {
+        case GS_PSM_T8: bytesPerPixel = 1u; break;
+        case GS_PSM_CT16:
+        case GS_PSM_CT16S: bytesPerPixel = 2u; break;
+        case GS_PSM_CT24: bytesPerPixel = 3u; break;
+        case GS_PSM_CT32: bytesPerPixel = 4u; break;
+        default: return false;
+        }
+        const uint32_t width = command.trxreg.rrw, height = command.trxreg.rrh;
+        if (width == 0u || height == 0u || width * height > 512u * 512u)
+            return false;
+        const uint32_t sbw = std::max<uint32_t>(blt.sbw, 1u), dbw = std::max<uint32_t>(blt.dbw, 1u);
+        GsPageSet sourcePages, destinationPages;
+        gsMarkPages(sourcePages, blt.sbp, sbw, psm, width, height, command.trxpos.ssax, command.trxpos.ssay);
+        gsMarkPages(destinationPages, blt.dbp, dbw, psm, width, height, command.trxpos.dsax, command.trxpos.dsay);
+        GsSurface *from = targets->nativeOwner(sourcePages, true);
+        GsSurface *to = targets->nativeOwner(destinationPages, true);
+        if (!from || !to || from->scale != to->scale || !from->texture || !to->texture)
+            return false;
+
+        constexpr uint32_t kGsVramBytes = 4u * 1024u * 1024u;
+        auto address = [psm](uint32_t base, uint32_t bw, uint32_t x, uint32_t y) {
+            switch (psm) {
+            case GS_PSM_T8: return GSPSMT8::addrPSMT8(base, bw, x, y);
+            case GS_PSM_CT16: return GSPSMCT16::addrPSMCT16(base, bw, x, y);
+            case GS_PSM_CT16S: return GSPSMCT16::addrPSMCT16S(base, bw, x, y);
+            default: return GSPSMCT32::addrPSMCT32(base, bw, x, y);
+            }
+        };
+        // Where each word of a page sits in a CT32 page: the inverse swizzle.
+        static const std::array<uint16_t, 2048> wordPixel = [] {
+            std::array<uint16_t, 2048> table{};
+            for (uint32_t y = 0u; y < 32u; ++y)
+                for (uint32_t x = 0u; x < 64u; ++x)
+                    table[GSPSMCT32::addrPSMCT32(0u, 1u, x, y) >> 2u] = static_cast<uint16_t>(x | (y << 8u));
+            return table;
+        }();
+        // A byte address as (pixel, byte) of a CT32 surface covering whole pages.
+        auto place = [](const GsSurface &surface, uint32_t byteAddress, uint32_t &x, uint32_t &y) {
+            const uint32_t page = (byteAddress >> 13u) % kGsPageCount;
+            const uint32_t relative = (page + kGsPageCount - (surface.base >> 5u)) % kGsPageCount;
+            const uint16_t pixel = wordPixel[(byteAddress & 8191u) >> 2u];
+            x = (relative % surface.bufferWidth) * 64u + (pixel & 0xffu);
+            y = (relative / surface.bufferWidth) * 32u + (pixel >> 8u);
+            return x < surface.width && y < surface.height;
+        };
+
+        struct Byte {
+            uint32_t x, y, byte, code;
+        };
+        std::vector<Byte> bytes;
+        std::vector<uint32_t> sourceAddresses, destinationAddresses;
+        bytes.reserve(size_t(width) * height * bytesPerPixel);
+        GsRegion box{~0u, ~0u, 0u, 0u};
+        for (uint32_t row = 0u; row < height; ++row) {
+            for (uint32_t column = 0u; column < width; ++column) {
+                const uint32_t source = address(blt.sbp, sbw, command.trxpos.ssax + column, command.trxpos.ssay + row);
+                const uint32_t destination = address(blt.dbp, dbw, command.trxpos.dsax + column, command.trxpos.dsay + row);
+                for (uint32_t i = 0u; i < bytesPerPixel; ++i) {
+                    const uint32_t sourceByte = (source + i) & (kGsVramBytes - 1u);
+                    const uint32_t destinationByte = (destination + i) & (kGsVramBytes - 1u);
+                    uint32_t sx, sy, dx, dy;
+                    if (!place(*from, sourceByte, sx, sy) || !place(*to, destinationByte, dx, dy))
+                        return false;
+                    bytes.push_back({dx, dy, destinationByte & 3u,
+                                     0x80000000u | ((sourceByte & 3u) << 24u) | (sy << 12u) | sx});
+                    sourceAddresses.push_back(sourceByte);
+                    destinationAddresses.push_back(destinationByte);
+                    box.x0 = std::min(box.x0, dx);
+                    box.y0 = std::min(box.y0, dy);
+                    box.x1 = std::max(box.x1, dx + 1u);
+                    box.y1 = std::max(box.y1, dy + 1u);
+                }
+            }
+        }
+        // Overlapping ranges depend on the GS's scan order; the CPU follows it.
+        std::sort(sourceAddresses.begin(), sourceAddresses.end());
+        for (uint32_t destination : destinationAddresses)
+            if (std::binary_search(sourceAddresses.begin(), sourceAddresses.end(), destination))
+                return false;
+
+        std::string error;
+        if (!targets->refresh(*from, error) || (to != from && !targets->refresh(*to, error)))
+            return setError(std::move(error));
+        std::vector<uint32_t> mapping(size_t(box.width()) * box.height() * 4u, 0u);
+        for (const Byte &byte : bytes)
+            mapping[(size_t(byte.y - box.y0) * box.width() + (byte.x - box.x0)) * 4u + byte.byte] = byte.code;
+        const SDL_Rect rect{int(box.x0), int(box.y0), int(box.width()), int(box.height())};
+        if (!device.localCopy(from->texture, to->texture, to->width, to->height, to->scale, rect, mapping, error))
+            return setError(std::move(error));
+        targets->markDrawn(*to, box);
+        // Other views of those pages are stale now; the destination keeps them.
+        targets->invalidate(destinationPages, true);
+        if (textures)
+            textures->invalidate(destinationPages, GsTextureCache::InvalidationSource::Draw);
+        ++stats.gpuLocalCopies;
+        return true;
     }
 
     // A write to local memory invalidates both caches: a render target holding
@@ -2880,6 +2995,13 @@ void SdlGpuBackend::BeginTransfer(const GSTransferCommand &command) {
         return;
     Impl::ScopedTimer timer(m_impl->backendNanos);
     ++m_impl->stats.transfersBegun;
+    if (command.direction == 2u) {
+        if (!m_impl->flushDraws()) return;
+        if (m_impl->gpuLocalCopy(command)) {
+            m_impl->transferCommand = command;
+            return;
+        }
+    }
     if (command.direction == 0u || command.direction == 2u) {
         GsPageSet pages;
         gsMarkPages(pages, command.bitbltbuf.dbp,
