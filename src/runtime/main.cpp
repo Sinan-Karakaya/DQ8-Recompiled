@@ -306,6 +306,12 @@ int main(int argc, char **argv)
     // scheduler starts executing.
     runtime.cpu().pc = entryPoint;
 
+    // VU1, with the VIF1 and GIF DMA that feed it, runs on its own thread as it
+    // runs beside the EE on a PS2: in heavy scenes VU1 was most of the game
+    // thread's time. DQ8_MTVU=0 keeps everything on the game thread.
+    if (const char *mtvu = std::getenv("DQ8_MTVU"); !mtvu || std::strcmp(mtvu, "0") != 0)
+        runtime.setMtvuEnabled(true);
+
     if (!std::getenv("DQ8_DISABLE_VU_BOUNDS_FIX") && !dq8::installVuBoundsComparisons(runtime))
         std::fprintf(stderr, "[dq8] VU bounds comparison repair could not be installed\n");
 
