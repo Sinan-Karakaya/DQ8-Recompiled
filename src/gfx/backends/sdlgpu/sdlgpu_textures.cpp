@@ -253,9 +253,15 @@ bool GsTextureCache::evictionImminent() const {
 }
 
 GsPageSet GsTextureCache::sourcePagesFor(const GSDrawState &state) const {
-    GsPageSet pages;
-    markSourcePages(keyFor(state), pages);
-    return pages;
+    // The pages depend on the key alone, so the memo never goes stale.
+    const GsTextureKey key = keyFor(state);
+    if (!m_lastSourceValid || !(key == m_lastSourceKey)) {
+        m_lastSourcePages.reset();
+        markSourcePages(key, m_lastSourcePages);
+        m_lastSourceKey = key;
+        m_lastSourceValid = true;
+    }
+    return m_lastSourcePages;
 }
 
 GsTextureKey GsTextureCache::keyFor(const GSDrawState &state) {

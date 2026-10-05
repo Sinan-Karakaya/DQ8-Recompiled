@@ -452,6 +452,30 @@ struct SdlGpuBackend::Impl {
 
     std::vector<GsGpuVertex> vertices;
     std::vector<DrawBatch> batches;
+    // The pages the queued batches write, in total and per target: every
+    // primitive asks whether queued draws touch what it reads or writes, and
+    // scanning hundreds of batches for each one was a tenth of the worker.
+    struct PendingTarget {
+        const GsSurface *color;
+        GsPageSet pages;
+    };
+    GsPageSet pendingPages{};
+    std::vector<PendingTarget> pendingTargets;
+    void notePending(const GsSurface *color, const GsPageSet &pages) {
+        pendingPages |= pages;
+        for (auto &target : pendingTargets) {
+            if (target.color == color) {
+                target.pages |= pages;
+                return;
+            }
+        }
+        pendingTargets.push_back({color, pages});
+    }
+    void clearBatches() {
+        batches.clear();
+        pendingPages.reset();
+        pendingTargets.clear();
+    }
 
     SDL_GPUBuffer *vertexBuffer = nullptr;
     uint32_t vertexBufferCapacity = 0u;
@@ -620,16 +644,12 @@ struct SdlGpuBackend::Impl {
     // True when a queued batch draws into any of these pages, so their content
     // is not yet in the render target -- let alone in local memory.
     bool pendingDrawsTouch(const GsPageSet &pages) const {
-        for (const DrawBatch &batch : batches) {
-            if ((batch.writtenPages & pages).any())
-                return true;
-        }
-        return false;
+        return (pendingPages & pages).any();
     }
 
     bool pendingDrawsTouchOthers(const GsPageSet &pages, const GsSurface *surface) const {
-        for (const DrawBatch &batch : batches) {
-            if (batch.color != surface && (batch.writtenPages & pages).any())
+        for (const auto &target : pendingTargets) {
+            if (target.color != surface && (target.pages & pages).any())
                 return true;
         }
         return false;
@@ -966,10 +986,7 @@ struct SdlGpuBackend::Impl {
 
         // Distinct FRAME views can name the same GS pages. Finish the old
         // view before importing its pixels into the new one.
-        const bool pendingAlias = std::any_of(batches.begin(), batches.end(),
-            [&](const DrawBatch &pending) {
-                return pending.color != color && (pending.writtenPages & color->pages).any();
-            });
+        const bool pendingAlias = pendingDrawsTouchOthers(color->pages, color);
         if (pendingAlias && !flushDraws())
             return;
         if (!targets->prepareColorView(*color, error)) {
@@ -1311,11 +1328,14 @@ struct SdlGpuBackend::Impl {
                 batches[index].written.merge(draw.written);
                 batches[index].writtenPages |= draw.writtenPages;
             }
+            notePending(draw.color, draw.writtenPages);
         } else if (!alphaPass && open >= 1u && batches.back().sameStateAs(draw)) {
             batches.back().vertexCount += addedVertices;
             batches.back().written.merge(draw.written);
             batches.back().writtenPages |= draw.writtenPages;
+            notePending(draw.color, draw.writtenPages);
         } else {
+            notePending(draw.color, draw.writtenPages);
             draw.firstVertex = firstVertex;
             draw.vertexCount = addedVertices;
             batches.push_back(draw);
@@ -1541,7 +1561,7 @@ struct SdlGpuBackend::Impl {
         endPass();
         if (!SDL_SubmitGPUCommandBuffer(ownedCommands.release()))
             return setError(std::string("SDL_SubmitGPUCommandBuffer(draw): ") + SDL_GetError());
-        batches.clear();
+        clearBatches();
         vertices.clear();
 
         // Drawing into a render target changes what a texture built from that
@@ -2829,7 +2849,7 @@ void SdlGpuBackend::Initialize(uint8_t *vram, uint32_t vramSize) {
 
 void SdlGpuBackend::Reset() {
     std::lock_guard lock(m_impl->mutex);
-    m_impl->batches.clear();
+    m_impl->clearBatches();
     m_impl->vertices.clear();
     m_impl->transferCommand = {};
     m_impl->patchingHostWrite = false;
@@ -2845,6 +2865,13 @@ void SdlGpuBackend::Submit(const GSPrimitiveBatch &batch) {
     std::lock_guard lock(m_impl->mutex);
     Impl::ScopedTimer timer(m_impl->backendNanos);
     m_impl->submit(batch);
+}
+
+void SdlGpuBackend::SubmitMany(const GSPrimitiveBatch *const *batches, size_t count) {
+    std::lock_guard lock(m_impl->mutex);
+    Impl::ScopedTimer timer(m_impl->backendNanos);
+    for (size_t i = 0; i < count; ++i)
+        m_impl->submit(*batches[i]);
 }
 
 void SdlGpuBackend::BeginTransfer(const GSTransferCommand &command) {
