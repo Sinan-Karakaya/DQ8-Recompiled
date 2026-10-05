@@ -151,6 +151,14 @@ public:
                         uint32_t width, uint32_t height, const SDL_Rect &region,
                         const std::array<uint32_t, 4> &pages, std::string &error);
 
+    // A GS local-to-local transfer between CT32 targets at the same scale.
+    // `mapping` holds four codes per pixel of `box` in the destination (see
+    // gs_local_copy.frag). `source` may be `destination`; both are read from
+    // before the pass writes.
+    bool localCopy(SDL_GPUTexture *source, SDL_GPUTexture *destination, uint32_t width, uint32_t height,
+                   uint32_t scale, const SDL_Rect &box, const std::vector<uint32_t> &mapping,
+                   std::string &error);
+
     bool composeDisplay(SDL_GPUTexture *circuit1, SDL_GPUTexture *circuit2,
                         SDL_GPUTexture *destination, uint32_t width, uint32_t height,
                         const GsDisplayUniforms &uniforms, SDL_GPUFence *&completed, std::string &error);
@@ -177,6 +185,7 @@ private:
     void releaseIndex8();
 
     SDL_GPUGraphicsPipeline *m_reinterpretPipeline = nullptr;
+    SDL_GPUGraphicsPipeline *m_localCopyPipeline = nullptr;
     SDL_GPUGraphicsPipeline *m_displayPipeline = nullptr;
     SDL_GPUGraphicsPipeline *m_index8Pipeline = nullptr;
     SDL_GPUTexture *m_index8Palette = nullptr;

@@ -214,11 +214,12 @@ int main(int argc, char **argv) try {
     std::printf("vram-hash=%016llx\n", static_cast<unsigned long long>(hash));
     if (gpu) {
         const auto s = gpu->stats();
-        std::printf("resolves=%llu resolved-pixels=%llu refreshes=%llu draws=%llu passes=%llu feedback-copies=%llu\n",
+        std::printf("resolves=%llu resolved-pixels=%llu refreshes=%llu draws=%llu passes=%llu feedback-copies=%llu gpu-local-copies=%llu\n",
             static_cast<unsigned long long>(s.colorResolves), static_cast<unsigned long long>(s.resolvedPixels),
             static_cast<unsigned long long>(s.colorRefreshes), static_cast<unsigned long long>(s.drawCalls),
             static_cast<unsigned long long>(s.renderPasses),
-            static_cast<unsigned long long>(s.feedbackCopies));
+            static_cast<unsigned long long>(s.feedbackCopies),
+            static_cast<unsigned long long>(s.gpuLocalCopies));
         std::printf("presents: native=%llu cpu-composed=%llu gpu-composed=%llu\n",
             static_cast<unsigned long long>(s.nativePresents),
             static_cast<unsigned long long>(s.composedPresents),
