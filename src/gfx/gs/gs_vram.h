@@ -53,6 +53,18 @@ void gsMarkPages(GsPageSet &pages,
                  uint32_t x = 0u,
                  uint32_t y = 0u);
 
+// The pages a rectangle writes completely, so none of their old contents
+// survive it. A subset of gsMarkPages; empty where page cells do not tile the
+// buffer exactly.
+void gsMarkCoveredPages(GsPageSet &pages,
+                        uint32_t baseBlock,
+                        uint32_t bufferWidth,
+                        uint32_t psm,
+                        uint32_t width,
+                        uint32_t height,
+                        uint32_t x = 0u,
+                        uint32_t y = 0u);
+
 // A view over externally owned GS local memory. GS::init() hands the backend
 // the frontend's allocation and other code may read it, so backends write
 // through to it rather than keeping a private copy that can silently diverge.

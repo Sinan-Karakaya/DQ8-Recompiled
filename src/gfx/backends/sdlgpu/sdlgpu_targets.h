@@ -135,7 +135,10 @@ public:
 
     // Makes local memory current for every surface overlapping `pages`.
     bool resolve(const GsPageSet &pages, std::string &error);
-    bool resolveForHostWrite(const GsPageSet &pages, std::string &error);
+    // Before a host write to `pages`: brings back what the GPU owns there
+    // and the write will not replace. `covered` are pages it writes whole.
+    bool resolveForHostWrite(const GsPageSet &pages, std::string &error,
+                             const GsPageSet &covered = {});
     bool resolveAll(std::string &error);
 
     // Records that local memory changed under `pages`.

@@ -251,40 +251,75 @@ bool samplesFitSurface(const GSPrimitiveBatch &batch, const GsSurface &surface,
         minV = std::min(minV, batch.vertices[i].v / 16.0);
         maxV = std::max(maxV, batch.vertices[i].v / 16.0);
     }
+    // How the fragment shader samples at a scale above 1: a draw on the
+    // native grid samples each GS pixel at its own position, as the GS does;
+    // any other bilinear draw filters the target's physical texels.
+    const double scale = std::max(surface.scale, 1u);
+    const uint32_t framePsm = state.context.frame.psm;
+    const bool nativeGrid = scale > 1.0 &&
+        (!state.linearFilter || framePsm == GS_PSM_CT16 || framePsm == GS_PSM_CT16S);
+    const bool physicalTaps = scale > 1.0 && state.linearFilter && !nativeGrid;
+    double nativeMinU = minU, nativeMaxU = maxU, nativeMinV = minV, nativeMaxV = maxV;
     if (state.prim.type == GS_PRIM_SPRITE) {
         // Sprite edges are exclusive. Check the samples actually covered,
         // including subpixels at higher scales, rather than the unused far edge.
+        // The vertex shader moves geometry half a host pixel, so host pixel h
+        // is covered from h = ceil(x * scale) and samples GS position h / scale.
         const auto &a = batch.vertices[0];
         const auto &b = batch.vertices[1];
-        auto range = [&](double p0, double p1, double t0, double t1,
-                         uint32_t clip0, uint32_t clip1, double &lo, double &hi) {
+        auto range = [&](double p0, double p1, double t0, double t1, uint32_t clip0, uint32_t clip1,
+                         double &lo, double &hi, double &nativeLo, double &nativeHi) {
             if (p0 == p1 || !std::isfinite(p0) || !std::isfinite(p1)) return false;
-            const double scale = surface.scale;
-            const double first = std::max(std::ceil((std::min(p0, p1) + 0.5) * scale - 0.5),
-                                          clip0 * scale);
-            const double last = std::min(std::ceil((std::max(p0, p1) + 0.5) * scale - 0.5) - 1.0,
+            const double first = std::max(std::ceil(std::min(p0, p1) * scale), clip0 * scale);
+            const double last = std::min(std::ceil(std::max(p0, p1) * scale) - 1.0,
                                          (clip1 + 1.0) * scale - 1.0);
             if (first > last) return false;
             auto sample = [&](double pixel) {
-                const double position = (pixel + 0.5) / scale - 0.5;
+                const double position = nativeGrid ? std::floor(pixel / scale) : pixel / scale;
                 return t0 + (t1 - t0) * (position - p0) / (p1 - p0);
             };
             lo = std::min(sample(first), sample(last));
             hi = std::max(sample(first), sample(last));
+            // Where the GS's own samples end, at each covered GS pixel's
+            // position: a bound the upscaled sub-pixels past it may clamp to.
+            const auto native = [&](double pixel) {
+                return t0 + (t1 - t0) * (std::floor(pixel / scale) - p0) / (p1 - p0);
+            };
+            nativeLo = std::min(native(first), native(last));
+            nativeHi = std::max(native(first), native(last));
             return true;
         };
         const auto &c = state.context;
         if (!range(a.x - c.xyoffset.ofx / 16.0, b.x - c.xyoffset.ofx / 16.0,
-                   a.u / 16.0, b.u / 16.0, c.scissor.x0, c.scissor.x1, minU, maxU) ||
+                   a.u / 16.0, b.u / 16.0, c.scissor.x0, c.scissor.x1, minU, maxU, nativeMinU, nativeMaxU) ||
             !range(a.y - c.xyoffset.ofy / 16.0, b.y - c.xyoffset.ofy / 16.0,
-                   a.v / 16.0, b.v / 16.0, c.scissor.y0, c.scissor.y1, minV, maxV))
+                   a.v / 16.0, b.v / 16.0, c.scissor.y0, c.scissor.y1, minV, maxV, nativeMinV, nativeMaxV))
             return false;
     }
-    auto fits = [&](double lo, double hi, uint32_t size, uint32_t extent, GsWrapMode mode,
-                    uint32_t &first, uint32_t &end) {
-        const double shift = state.linearFilter ? 0.5 : 0.0;
-        lo = std::floor(lo - shift);
-        hi = state.linearFilter ? std::ceil(hi - shift) : std::floor(hi);
+    auto fits = [&](double lo, double hi, double nativeLo, double nativeHi, uint32_t size,
+                    uint32_t extent, GsWrapMode mode, uint32_t &first, uint32_t &end) {
+        if (physicalTaps) {
+            // The two physical texels about position * scale - 0.5, as GS
+            // texels. A 1:1 copy lands exactly on a texel, leaving the next
+            // one no weight: not a tap.
+            lo = std::floor(std::floor(lo * scale - 0.5) / scale);
+            hi = std::floor(std::ceil(hi * scale - 0.5 - 1.0 / 256.0) / scale);
+            // Sub-pixels past the GS's last sample can reach a texel beyond
+            // the target the GS never reads. The shader clamps them to the
+            // bound texture, so they only count when the GS's own taps
+            // already leave the target.
+            if (std::floor(nativeLo - 0.5) >= 0.0)
+                lo = std::max(lo, 0.0);
+            if (std::ceil(nativeHi - 0.5) < extent)
+                hi = std::min(hi, double(extent) - 1.0);
+        } else if (state.linearFilter) {
+            lo = std::floor(lo - 0.5);
+            hi = std::ceil(hi - 0.5);
+        } else {
+            // The shader's point-sample bias.
+            lo = std::floor(lo);
+            hi = std::floor(hi + 1.0 / 256.0);
+        }
         if (mode == kWrapClamp) {
             lo = std::clamp(lo, 0.0, double(size - 1u));
             hi = std::clamp(hi, 0.0, double(size - 1u));
@@ -303,10 +338,10 @@ bool samplesFitSurface(const GSPrimitiveBatch &batch, const GsSurface &surface,
         return lo >= 0.0 && hi < extent;
     };
     GsRegion taps;
-    const bool fitsU = fits(minU, maxU, std::max<uint16_t>(state.textureWidth, 1u), surface.width,
-                           clamp.wrapU, taps.x0, taps.x1);
-    const bool fitsV = fits(minV, maxV, std::max<uint16_t>(state.textureHeight, 1u), surface.height,
-                           clamp.wrapV, taps.y0, taps.y1);
+    const bool fitsU = fits(minU, maxU, nativeMinU, nativeMaxU, std::max<uint16_t>(state.textureWidth, 1u),
+                           surface.width, clamp.wrapU, taps.x0, taps.x1);
+    const bool fitsV = fits(minV, maxV, nativeMinV, nativeMaxV, std::max<uint16_t>(state.textureHeight, 1u),
+                           surface.height, clamp.wrapV, taps.y0, taps.y1);
     if (coverage) *coverage = taps;
     return fitsU && fitsV;
 }
@@ -503,7 +538,8 @@ struct SdlGpuBackend::Impl {
     std::atomic<uint32_t> requestedScale{0u};
     std::atomic<uint32_t> activeScale{1u};
     // Removes the PS2's one-line display blend; read by the composing thread.
-    std::atomic<bool> removeLineBlend{false};
+    // DQ8_GFX_REMOVE_LINE_BLEND sets it for the trace replay, which has no menu.
+    std::atomic<bool> removeLineBlend{std::getenv("DQ8_GFX_REMOVE_LINE_BLEND") != nullptr};
     uint64_t previousPresentDraws = 0u;
     uint64_t previousPresentTransfers = 0u;
     uint64_t titlePresents = 0u;
@@ -563,11 +599,11 @@ struct SdlGpuBackend::Impl {
     // Draws are deferred, so anything that touches local memory has to land
     // them first: otherwise a transfer would overwrite a region whose pending
     // draws had not happened yet, and the draws would then be applied on top.
-    bool settleFor(const GsPageSet &pages, bool hostWrite = false) {
+    bool settleFor(const GsPageSet &pages, bool hostWrite = false, const GsPageSet &covered = {}) {
         if (!flushDraws())
             return false;
         std::string error;
-        if (!(hostWrite ? targets->resolveForHostWrite(pages, error) : targets->resolve(pages, error)))
+        if (!(hostWrite ? targets->resolveForHostWrite(pages, error, covered) : targets->resolve(pages, error)))
             return setError(std::move(error));
         return true;
     }
@@ -2059,18 +2095,23 @@ struct SdlGpuBackend::Impl {
                 // A fractional nearest scale duplicates some columns and not
                 // others, which shreds one-pixel font stems. Nearest to the
                 // whole multiple above the output, then bilinear down to it.
+                // Per axis: with one factor, a picture stretched more across
+                // than down has its bilinear pass shrink rows below half.
                 constexpr uint32_t kLimit = 8192u;
-                const uint32_t factor = static_cast<uint32_t>(std::ceil(
-                    std::max(double(rect.width) / width, double(rect.height) / height)));
-                if (width * factor <= kLimit && height * factor <= kLimit &&
-                    ensureScratch(sharpTexture, width * factor, height * factor,
+                const auto factorFor = [](uint32_t output, uint32_t size) {
+                    return std::max(1u, static_cast<uint32_t>(std::ceil(double(output) / size)));
+                };
+                const uint32_t factorX = factorFor(rect.width, width);
+                const uint32_t factorY = factorFor(rect.height, height);
+                if (width * factorX <= kLimit && height * factorY <= kLimit &&
+                    ensureScratch(sharpTexture, width * factorX, height * factorY,
                                   SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM)) {
                     blitRegion(commands, source, {0u, 0u, width, height}, sharpTexture.texture,
-                               {0u, 0u, width * factor, height * factor}, SDL_GPU_FILTER_NEAREST,
+                               {0u, 0u, width * factorX, height * factorY}, SDL_GPU_FILTER_NEAREST,
                                SDL_GPU_LOADOP_DONT_CARE);
                     source = sharpTexture.texture;
-                    width *= factor;
-                    height *= factor;
+                    width *= factorX;
+                    height *= factorY;
                 }
             }
         }
@@ -2824,7 +2865,12 @@ void SdlGpuBackend::BeginTransfer(const GSTransferCommand &command) {
         if (!m_impl->flushDraws()) return;
         if (command.direction != 0u || command.bitbltbuf.dpsm != GS_PSM_CT32 ||
             !m_impl->targets->canPatchHostWrite(pages)) {
-            if (!m_impl->settleFor(pages, true)) return;
+            GsPageSet covered;
+            gsMarkCoveredPages(covered, command.bitbltbuf.dbp,
+                               std::max<uint32_t>(command.bitbltbuf.dbw, 1u),
+                               command.bitbltbuf.dpsm, command.trxreg.rrw, command.trxreg.rrh,
+                               command.trxpos.dsax, command.trxpos.dsay);
+            if (!m_impl->settleFor(pages, true, covered)) return;
         }
     }
     m_impl->transferCommand = command;
@@ -2849,7 +2895,12 @@ void SdlGpuBackend::UploadImage(const uint8_t *data, uint32_t sizeBytes) {
         // each payload before any CPU bytes change.
         if (!m_impl->flushDraws()) return;
         m_impl->patchingHostWrite = m_impl->targets->canPatchHostWrite(pages);
-        if (!m_impl->patchingHostWrite && !m_impl->settleFor(pages, true)) return;
+        GsPageSet covered;
+        gsMarkCoveredPages(covered, command.bitbltbuf.dbp,
+                           std::max<uint32_t>(command.bitbltbuf.dbw, 1u), GS_PSM_CT32,
+                           command.trxreg.rrw, command.trxreg.rrh,
+                           command.trxpos.dsax, command.trxpos.dsay);
+        if (!m_impl->patchingHostWrite && !m_impl->settleFor(pages, true, covered)) return;
     }
     m_impl->transfer->upload(data, sizeBytes);
     if (m_impl->patchingHostWrite) {
@@ -3120,8 +3171,20 @@ bool SdlGpuBackend::openWindow(const char *title, uint32_t width, uint32_t heigh
     if (m_impl->window != nullptr)
         return true;
 
-    // High pixel density: on a Retina display the swapchain is then the
-    // panel's own size, not a quarter of it scaled up by the compositor.
+    if (width == 0u || height == 0u) {
+        // 4:3, at the largest whole multiple of the GS height that leaves
+        // room on the desktop.
+        SDL_Rect usable{0, 0, 1280, 960};
+        SDL_GetDisplayUsableBounds(SDL_GetPrimaryDisplay(), &usable);
+        const uint32_t multiple = std::max<uint32_t>(
+            1u, static_cast<uint32_t>(usable.h * 0.85 / 448.0));
+        height = 448u * multiple;
+        width = height * 4u / 3u;
+    }
+    // High pixel density: on a scaled desktop the swapchain is then as many
+    // pixels as the window covers, rather than its logical size stretched by
+    // the compositor, which would shrink a high internal resolution and blur
+    // what is left.
     m_impl->window = SDL_CreateWindow(title, static_cast<int>(width), static_cast<int>(height),
                                       SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (!m_impl->window) {
