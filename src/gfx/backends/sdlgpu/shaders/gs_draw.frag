@@ -168,6 +168,27 @@ vec4 sampleTexture() {
         return fetchTexelAt(ivec2(base), texel - base);
     }
 
+    // An upscaled render target filtered across its own physical texels, as
+    // a GS drawing at the higher resolution would: averaging native texels
+    // instead brings every copy of the frame back down to native detail, and
+    // DQ8 copies the whole frame to its display buffer bilinearly. Native-grid
+    // copies keep their sub-sample plane and stay on the GS path below.
+    const int sourceScale = max(int(params.misc.y), 1);
+    if (sourceScale > 1 && g_plane.x < 0.0) {
+        const vec2 physical = texel * float(sourceScale) - 0.5;
+        const ivec2 first = ivec2(floor(physical));
+        const vec2 weight = physical - vec2(first);
+        vec4 taps[4];
+        for (int i = 0; i < 4; ++i) {
+            const ivec2 p = first + ivec2(i & 1, i >> 1);
+            // Floor division, so texels left of zero wrap like the GS's.
+            const ivec2 gsTexel = ivec2(floor(vec2(p) / float(sourceScale)));
+            const vec2 sub = (vec2(p - gsTexel * sourceScale) + 0.5) / float(sourceScale);
+            taps[i] = fetchTexelAt(gsTexel, sub);
+        }
+        return mix(mix(taps[0], taps[1], weight.x), mix(taps[2], taps[3], weight.x), weight.y);
+    }
+
     // Bilinear about the texel centre, matching the GS's half-texel offset.
     vec2 base = texel - 0.5;
     // The GS weighs the four texels with 4 fractional bits. Copies through a

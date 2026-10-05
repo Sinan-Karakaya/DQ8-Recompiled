@@ -88,14 +88,14 @@ int main(int argc, char **argv) try {
             if (traceDraws) {
                 const auto &s = batch.state;
                 const auto &c = s.context;
-                std::printf("draw=%llu frame=%llu type=%u dst=%x/%u/%u mask=%08x src=%x/%u/%u %ux%u tme=%u abe=%u alpha=%llx test=%llx linear=%u clamp=%llx zbuf=%x/%u/%u\n",
+                std::printf("draw=%llu frame=%llu type=%u dst=%x/%u/%u mask=%08x src=%x/%u/%u %ux%u tme=%u abe=%u alpha=%llx test=%llx linear=%u clamp=%llx zbuf=%x/%u/%u tex1=%llx\n",
                     static_cast<unsigned long long>(draws), static_cast<unsigned long long>(frames),
                     s.prim.type, c.frame.fbp * 32u, c.frame.fbw, c.frame.psm, c.frame.fbmsk,
                     c.tex0.tbp0, c.tex0.tbw, c.tex0.psm, s.textureWidth, s.textureHeight,
                     s.prim.tme, s.prim.abe, static_cast<unsigned long long>(c.alpha),
                     static_cast<unsigned long long>(c.test), s.linearFilter,
                     static_cast<unsigned long long>(c.clamp), c.zbuf.zbp * 32u,
-                    c.zbuf.psm, c.zbuf.zmask);
+                    c.zbuf.psm, c.zbuf.zmask, static_cast<unsigned long long>(c.tex1));
                 for (unsigned i = 0; i < batch.vertexCount; ++i) {
                     const auto &v = batch.vertices[i];
                     std::printf("  xy=%.4f,%.4f z=%.0f uv=%u,%u stq=%.5g,%.5g,%.5g rgba=%u,%u,%u,%u\n",
