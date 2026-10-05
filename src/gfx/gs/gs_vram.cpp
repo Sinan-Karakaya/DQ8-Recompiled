@@ -117,6 +117,31 @@ void gsMarkPages(GsPageSet &pages,
     }
 }
 
+void gsMarkCoveredPages(GsPageSet &pages,
+                        uint32_t baseBlock,
+                        uint32_t bufferWidth,
+                        uint32_t psm,
+                        uint32_t width,
+                        uint32_t height,
+                        uint32_t x,
+                        uint32_t y) {
+    const GsPageExtent extent = gsPageExtent(psm);
+    const uint32_t pixelsPerRow = std::max<uint32_t>(bufferWidth, 1u) * 64u;
+    // Only where page cells tile the buffer exactly; anything else covers
+    // no page with certainty.
+    if (!extent.valid() || width == 0u || height == 0u || (baseBlock & 31u) != 0u ||
+        pixelsPerRow % extent.width != 0u || x + width > pixelsPerRow)
+        return;
+    const uint32_t pagesPerRow = pixelsPerRow / extent.width;
+    const uint32_t firstColumn = (x + extent.width - 1u) / extent.width;
+    const uint32_t endColumn = (x + width) / extent.width;
+    const uint32_t firstRow = (y + extent.height - 1u) / extent.height;
+    const uint32_t endRow = (y + height) / extent.height;
+    for (uint32_t row = firstRow; row < endRow; ++row)
+        for (uint32_t column = firstColumn; column < endColumn; ++column)
+            pages.set(((baseBlock >> 5u) + row * pagesPerRow + column) % kGsPageCount);
+}
+
 GsVram::GsVram() {
     ensureLookupTables();
 }

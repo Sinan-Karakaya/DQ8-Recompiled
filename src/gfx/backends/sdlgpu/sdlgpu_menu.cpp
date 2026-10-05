@@ -344,9 +344,10 @@ void SdlGpuMenu::render(SDL_GPUCommandBuffer *commands, SDL_GPUTexture *target,
     if (!visible())
         return;
 
-    // Size the UI to the window, so it stays readable fullscreen at 4K.
+    // Size the UI to the window, so it stays readable fullscreen at 4K. In
+    // logical units: ImGui applies the display's pixel density itself.
     int width = 0, height = 0;
-    SDL_GetWindowSizeInPixels(m_window, &width, &height);
+    SDL_GetWindowSize(m_window, &width, &height);
     const float scale = std::clamp(std::round(height / 360.0f) / 2.0f, 1.0f, 4.0f);
     ImGuiStyle &style = ImGui::GetStyle();
     if (style.FontScaleMain != scale) {
