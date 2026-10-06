@@ -7,7 +7,8 @@ and drives the static recompiler. Assets and generated C++ stay local.
 Subcommands:
     verify      Check the ISO and extracted files against known-good hashes.
     extract     Unpack HD6 archives and decrypt MVI movies from a disc tree.
-    recompile   Drive ps2xRecomp over the ELF + overlays.
+    recompile   Drive ps2xRecomp over the ELF + overlays, and rebuild the VU1
+                programs the runtime compiles from the ELF.
 
 Only the Python standard library is used.
 """
@@ -252,6 +253,13 @@ def cmd_recompile(args: argparse.Namespace) -> None:
                   config_dir / f"functions_{name}.csv", overlay_output / name)
     subprocess.run([sys.executable, str(REPO_ROOT / "tools/mwo3/gen_overlay_table.py"),
                     "--all", str(overlay_output)], check=True)
+    # The VU1 microcode compiled into the runtime, taken from this ELF.
+    subprocess.run([sys.executable,
+                    str(REPO_ROOT / "thirdparty/PS2Recomp/tools/vu_program_manifest.py"), "expand",
+                    "--manifest", str(config_dir / "vu1-programs.txt"),
+                    "--game-root", str(extracted),
+                    "--output", str(build / "generated" / f"{args.version}-vu1")],
+                   check=True)
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +293,8 @@ def main() -> None:
     p_extract.add_argument("--mvi-key", help="user-supplied 2048-byte MVI key (required when MOVIE is present)")
     p_extract.set_defaults(func=cmd_extract)
 
-    p_recompile = sub.add_parser("recompile", help="recompile the ELF + overlays to C++")
+    p_recompile = sub.add_parser("recompile",
+                                 help="recompile the ELF + overlays to C++ and rebuild the VU1 programs")
     p_recompile.add_argument("--version", default="SLUS_212.07")
     p_recompile.add_argument("--extracted", required=True, help="extracted NTSC-U disc tree")
     p_recompile.add_argument("--recompiler", default=str(
