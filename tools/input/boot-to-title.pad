@@ -1,7 +1,7 @@
 # Input script for DQ8, replayed against the guest's own frame clock.
 #
 #   DQ8_PAD_SCRIPT=tools/input/boot-to-title.pad \
-#   ./build/dq8-o2/src/runtime/dq8 ../Extracted_Usa/SLUS_212.07 \
+#   ./build/game/src/runtime/dq8 ../Extracted_Usa/SLUS_212.07 \
 #       --iso=../DQ8_USA.iso --gs=sdlgpu
 #
 # Columns: <guest-frame> <BUTTON>[+<BUTTON>...] [hold-frames]
