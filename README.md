@@ -31,6 +31,26 @@ launcher stub, not the game.
 - [Tests and debugging](https://github.com/Sinan-Karakaya/DQ8-Recompiled/wiki/Testing)
 - [Status and priorities](https://github.com/Sinan-Karakaya/DQ8-Recompiled/wiki/Project-Status)
 
+## In-game settings
+
+With the SDL GPU renderer (`--gs=sdlgpu`), **F1** (or a controller's Guide
+button, or Back+Start) opens a settings menu. While it is open the game gets no
+input.
+
+| Setting | Choices |
+| --- | --- |
+| Internal resolution | 1x (512x448, original) to 8x, applied immediately |
+| Aspect ratio | Auto (default: follows the game's Screen Size), 4:3, 16:9, square pixels (8:7), fill window |
+| Upscaling filter | Sharp bilinear (default), bilinear, nearest (integer scale) |
+| Window | Fullscreen (also F11), frame-rate counter |
+
+Widescreen is built into DQ8: set *Screen Size* to *Wide Screen 16:9* in the
+game's own settings, and the Auto aspect shows it at 16:9.
+
+Settings are saved to `settings.ini` in SDL's per-user preferences folder
+(`~/.local/share/DQ8Recomp/DQ8Recomp/` on Linux); `--scale=N` still overrides
+the internal resolution for one run.
+
 ## Contributing
 
 See [CONTRIBUTE.md](CONTRIBUTE.md) for the workflow, testing expectations, and rules
