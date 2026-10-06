@@ -59,6 +59,10 @@ developers' event viewer list), put the story at any of its story points, or
 go to any town or dungeon. It changes the game's progress, so don't save over
 a real adventure log after using it.
 
+The test menu's Cheats tab turns random battles off, so you can walk anywhere,
+and takes the party to level 99 after one battle, with every skipped level's
+skill points to allocate.
+
 ## Contributing
 
 See [CONTRIBUTE.md](CONTRIBUTE.md) for the workflow, testing expectations, and rules
