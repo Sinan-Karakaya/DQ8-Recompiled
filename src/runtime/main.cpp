@@ -16,6 +16,7 @@
 
 #include "ps2_runtime.h"
 #include "ps2_recompiled_functions.h"
+#include "runtime/ee_scheduler.h"
 #include "runtime/ps2_native_iop.h"
 #include "runtime/gs/gs_frontend.h"
 #include "runtime/gs/gs_threaded_backend.h"
@@ -63,13 +64,21 @@ namespace
         return {height * 4u / 3u, height};
     }
 
-    std::unique_ptr<dq8::ui::Overlay> createMenu(dq8::gfx::SdlGpuBackend &backend, dq8::ui::Settings settings,
-                                                 const std::string &settingsPath, bool sound)
+    std::unique_ptr<dq8::ui::Overlay> createMenu(PS2Runtime &runtime, dq8::gfx::SdlGpuBackend &backend,
+                                                 dq8::ui::Settings settings, const std::string &settingsPath,
+                                                 bool sound)
     {
         dq8::ui::HostServices host;
         host.version = DQ8_VERSION;
         // --mute keeps the game silent whatever the menu's volume says.
         host.setVolume = [sound](float volume) { ps2_native_iop::setVolume(sound ? volume : 0.0f); };
+        // The sound driver runs in step with the audio device, so stopping
+        // the device stops the IOP along with the EE's clock.
+        host.setPaused = [&runtime](bool paused) {
+            runtime.eeScheduler().setHostPaused(paused);
+            ps2_native_iop::setPaused(paused);
+        };
+        host.setSpeed = [&runtime](double speed) { runtime.eeScheduler().setHostSpeed(speed); };
         host.completedRenders = [] {
             return dq8::diagnostics::RenderCadenceProbe::instance().publishedCompletedRoutines();
         };
@@ -220,7 +229,7 @@ int main(int argc, char **argv)
             else
             {
                 runtime.setExternalPresenter(&pumpSdlGpuPresenter, sdlBackend.get());
-                menu = createMenu(*sdlBackend, std::move(settings), settingsPath, sound);
+                menu = createMenu(runtime, *sdlBackend, std::move(settings), settingsPath, sound);
             }
         }
     }
