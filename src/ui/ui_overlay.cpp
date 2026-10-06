@@ -992,6 +992,15 @@ void Overlay::setPadConfig(const gfx::PadConfig &config) {
     markDirty();
 }
 
+void Overlay::requestScale(uint32_t scale) {
+    scale = std::clamp(scale, 1u, 8u);
+    m_backend.requestResolutionScale(scale);
+    m_pendingScale = scale != m_backend.activeResolutionScale() ? scale : 0u;
+    m_pendingScaleSince = now();
+    m_settings.resolutionScale = scale;
+    markDirty();
+}
+
 SDL_GamepadType Overlay::displayedControllerType() const {
     const auto controllers = m_backend.padInput().controllers();
     for (const auto &controller : controllers)

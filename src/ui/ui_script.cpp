@@ -125,10 +125,7 @@ void Overlay::runStep(const ScriptStep &step, uint64_t frame) {
         m_settings.display.integerScale = on;
         m_backend.setDisplayOptions(m_settings.display);
     } else if (command == "scale") {
-        const uint32_t scale = static_cast<uint32_t>(std::clamp(std::atoi(first.c_str()), 1, 8));
-        m_backend.requestResolutionScale(scale);
-        m_pendingScale = scale;
-        m_pendingScaleSince = now();
+        requestScale(static_cast<uint32_t>(std::clamp(std::atoi(first.c_str()), 1, 8)));
     } else if (command == "fps") {
         m_settings.showFps = on;
     } else if (command == "pause") {

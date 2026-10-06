@@ -213,17 +213,8 @@ void Overlay::drawDisplayPage() {
                 char item[64];
                 std::snprintf(item, sizeof(item), "%u%s   %u %s %u%s", scale, kTimes, 512u * scale, kTimes,
                               448u * scale, scale == 1u ? "   (PS2)" : "");
-                if (ImGui::Selectable(item, scale == shown)) {
-                    if (scale != active) {
-                        m_backend.requestResolutionScale(scale);
-                        m_pendingScale = scale;
-                        m_pendingScaleSince = now();
-                    } else {
-                        m_pendingScale = 0u;
-                    }
-                    m_settings.resolutionScale = scale;
-                    markDirty();
-                }
+                if (ImGui::Selectable(item, scale == shown))
+                    requestScale(scale);
             }
             ImGui::EndCombo();
         }

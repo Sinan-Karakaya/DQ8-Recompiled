@@ -151,6 +151,9 @@ private:
     void applyPause();
     void setFullscreen(bool fullscreen);
     void setPadConfig(const gfx::PadConfig &config);
+    // Asks for an internal resolution and saves it. Asking for the active one
+    // replaces a request still queued, which cancels it.
+    void requestScale(uint32_t scale);
     bool pausing() const;
     bool canPause() const { return static_cast<bool>(m_host.setPaused); }
     bool canChangeSpeed() const { return static_cast<bool>(m_host.setSpeed); }
