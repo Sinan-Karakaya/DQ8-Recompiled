@@ -42,7 +42,8 @@ struct TestMenuData {
     // Random battles on the field, on or off.
     std::function<void(bool enabled)> setRandomEncounters;
     std::function<bool()> randomEncounters;
-    // The whole party to level 99.
+    // The whole party to level 96 with the EXP of 99 minus one; the next
+    // battle's level-ups hand out the skipped levels' skill points.
     std::function<void()> partyToTopLevel;
 };
 

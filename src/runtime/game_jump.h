@@ -42,9 +42,11 @@ public:
     // Whether walking around the field starts random battles (the default).
     void setRandomEncounters(bool enabled);
     bool randomEncounters() const;
-    // Every party member (and the two who join later) to level 99, as
-    // battles level them -- stats, spells and abilities -- without the
-    // messages, then HP and MP refilled. Skill points are not handed out.
+    // Every party member (and the two who join later) to level 96 with the
+    // EXP of 99 minus one, as battles level them -- stats, spells and
+    // abilities -- without the messages; HP and MP refilled. The skill points
+    // of those levels are kept for the character's next level-ups, so the
+    // battle that takes them to 99 hands them all out to allocate.
     void partyToTopLevel();
 
     // The test menu's lists, from the developers' debug files in the game's

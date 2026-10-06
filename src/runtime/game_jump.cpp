@@ -41,7 +41,8 @@ constexpr uint32_t kRecordBytes = 0x68u;
 constexpr uint32_t kPartySize = 4u;
 constexpr uint32_t kExpTables = 0x41D19Cu;
 constexpr uint32_t kExpTableBytes = 0x190u;
-constexpr uint32_t kTopLevelIndex = 98u; // level 99
+constexpr uint32_t kTopLevelIndex = 98u; // level 99, stored as level - 1
+constexpr uint32_t kBattleLevelUps = 3u;  // left for the next battle
 constexpr uint32_t kLevelUp = 0x203D80u;    // (party, character, 0): one level and its stat gains
 constexpr uint32_t kLearnSpells = 0x202650u; // (character, record, out, kind 1/2): what the level teaches
 constexpr uint32_t kAddExp = 0x204240u;     // (party, character, amount)
@@ -220,6 +221,38 @@ void encounterCheck(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) {
     SET_GPR_U32(ctx, 2, 0u);
     ctx->pc = GPR_U32(ctx, 31);
 }
+
+// Skill points of the levels the test menu skips, per character, until the
+// character's next real level-up hands them out. The level-up writes what a
+// level brings to its third argument when there is one: HP, MP, the five
+// stats, then the skill points at +0x1C, which the end of a battle announces
+// and lets the player allocate.
+constexpr uint32_t kLevelUpSkillPoints = 0x1Cu;
+constexpr uint32_t kMaxSkillPointsPerLevel = 127u;
+std::array<std::atomic<uint32_t>, kPartySize> g_bankedSkillPoints{};
+std::atomic<uint32_t> g_bankBuffer{0u};
+PS2Runtime::RecompiledFunction g_levelUp = nullptr;
+
+void levelUp(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) {
+    const uint32_t character = GPR_U32(ctx, 5);
+    const uint32_t out = GPR_U32(ctx, 6) & 0x1FFFFFFu;
+    g_levelUp(rdram, ctx, runtime);
+    if (character >= kPartySize || out == 0u || out + kLevelUpSkillPoints + 4u > PS2_RAM_SIZE)
+        return;
+    uint32_t points = 0u;
+    std::memcpy(&points, rdram + out + kLevelUpSkillPoints, sizeof(points));
+    if (out == g_bankBuffer.load(std::memory_order_relaxed)) {
+        g_bankedSkillPoints[character].fetch_add(points, std::memory_order_relaxed);
+    } else if (const uint32_t banked = g_bankedSkillPoints[character].load(std::memory_order_relaxed)) {
+        // The battle's level-up list keeps a level's points in a signed byte
+        // (0x2A5D00), so at most 127 a level; the rest waits for the next.
+        const uint32_t given = std::min(banked, kMaxSkillPointsPerLevel - std::min(points, kMaxSkillPointsPerLevel));
+        g_bankedSkillPoints[character].fetch_sub(given, std::memory_order_relaxed);
+        points += given;
+        std::memcpy(rdram + out + kLevelUpSkillPoints, &points, sizeof(points));
+        std::fprintf(stderr, "[jump] character %u: %u skill points from the skipped levels\n", character, given);
+    }
+}
 } // namespace
 
 void GameJump::installHooks() {
@@ -228,6 +261,9 @@ void GameJump::installHooks() {
     g_encounterCheck = m_runtime.lookupFunction(kEncounterCheck);
     if (g_encounterCheck)
         m_runtime.registerFunction(kEncounterCheck, encounterCheck);
+    g_levelUp = m_runtime.lookupFunction(kLevelUp);
+    if (g_levelUp)
+        m_runtime.registerFunction(kLevelUp, levelUp);
 }
 
 void GameJump::setRandomEncounters(bool enabled) {
@@ -242,6 +278,13 @@ bool GameJump::randomEncounters() const {
 void GameJump::partyToTopLevel() {
     const uint8_t *rdram = m_runtime.memory().getRDRAM();
     EeScheduler &scheduler = m_runtime.eeScheduler();
+    // Level-ups here write what each level brings to this block, so the
+    // level-up hook keeps their skill points for the battle that takes the
+    // character to 99.
+    const uint32_t bank = allocateSlot();
+    if (bank == 0u || !g_levelUp)
+        return;
+    g_bankBuffer.store(bank, std::memory_order_relaxed);
     for (uint32_t character = 0; character < kPartySize; ++character) {
         const uint32_t record = kPartyRecords + character * kRecordBytes;
         uint16_t level = 0;
@@ -249,18 +292,20 @@ void GameJump::partyToTopLevel() {
         std::memcpy(&level, rdram + record + 0x10u, sizeof(level));
         std::memcpy(&exp, rdram + record + 0x18u, sizeof(exp));
         std::memcpy(&topExp, rdram + kExpTables + character * kExpTableBytes + kTopLevelIndex * 4u, sizeof(topExp));
-        // As the end of a battle does, level by level, without its messages.
-        for (uint32_t step = level; step < kTopLevelIndex; ++step)
-            scheduler.requestGuestCall(kLevelUp, {kParty, character, 0u, 0u});
-        if (topExp > exp)
-            scheduler.requestGuestCall(kAddExp, {kParty, character, topExp - exp, 0u});
+        // As the end of a battle does, level by level, without its messages,
+        // up to level 96: the battle then brings three level-ups, enough to
+        // hand out the skipped levels' points (about 350) 127 at a time.
+        for (uint32_t step = level; step < kTopLevelIndex - kBattleLevelUps; ++step)
+            scheduler.requestGuestCall(kLevelUp, {kParty, character, bank, 0u});
+        if (topExp - 1u > exp)
+            scheduler.requestGuestCall(kAddExp, {kParty, character, topExp - 1u - exp, 0u});
         for (uint32_t kind : {1u, 2u})
             if (const uint32_t learned = allocateSlot())
                 scheduler.requestGuestCall(kLearnSpells, {character, record, learned, kind});
         scheduler.requestGuestCall(kHealHp, {kParty, character, 999u, 0u});
         scheduler.requestGuestCall(kHealMp, {kParty, character, 999u, 0u});
     }
-    std::fprintf(stderr, "[jump] party to level 99\n");
+    std::fprintf(stderr, "[jump] party to level 96, 1 EXP short of 99\n");
 }
 
 std::shared_ptr<gfx::TestMenuData> GameJump::buildTestMenu(const std::string &archiveBase) {
