@@ -36,7 +36,7 @@ jobs:
           python3 -m unittest discover -s tools/tests -v
           python3 -m unittest discover -s tools/mvi -p 'test_*.py' -v
           python3 tools/oracle/logdiff.py --self-test
-          python3 -m unittest discover -s thirdparty/PS2Recomp/tools/tests -p 'test_compile_vu_*.py' -v
+          python3 -m unittest discover -s thirdparty/PS2Recomp/tools/tests -p 'test_*vu_*.py' -v
 
       - name: Build and run launcher stub
         if: github.event.repository.private

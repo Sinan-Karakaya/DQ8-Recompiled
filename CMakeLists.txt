@@ -77,6 +77,8 @@ option(DQ8_LINK_GENERATED
 
 set(DQ8_GENERATED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/generated/SLUS_212.07"
     CACHE PATH "Directory of recompiled .cpp files produced by ps2_recomp.")
+set(DQ8_VU_PROGRAMS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/build/generated/SLUS_212.07-vu1"
+    CACHE PATH "VU1 programs setup.py rebuilt from the game's ELF, compiled into the runtime.")
 
 set(DQ8_GENERATED_SIMD_FLAGS "")
 if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64|i.86)$")
@@ -134,6 +136,16 @@ if(DQ8_BUILD_PS2RECOMP)
             "DQ8Recomp: FFmpeg-backed MPEG decode, enabled when the libs are present" FORCE)
         set(PS2X_ENABLE_DEBUG_UI OFF CACHE BOOL
             "DQ8Recomp: skip imgui/rlImGui, not needed to link ps2_runtime" FORCE)
+        # Declared here first so the runtime's own declaration of it, under an
+        # older CMake policy, keeps the directory appended below.
+        set(PS2X_VU_PROGRAM_PROFILES "" CACHE STRING
+            "Local VU1 program profile directories to compile; never distributed")
+        if(EXISTS "${DQ8_VU_PROGRAMS_DIR}/entries.txt")
+            list(APPEND PS2X_VU_PROGRAM_PROFILES "${DQ8_VU_PROGRAMS_DIR}")
+        else()
+            message(STATUS "DQ8Recomp: no VU1 programs in ${DQ8_VU_PROGRAMS_DIR}; "
+                           "run setup.py recompile, then configure again, to compile them.")
+        endif()
     endif()
     add_subdirectory(thirdparty/PS2Recomp)
 
