@@ -52,6 +52,13 @@ Settings are saved to `settings.ini` in SDL's per-user preferences folder
 (`~/.local/share/DQ8Recomp/DQ8Recomp/` on Linux); `--scale=N` still overrides
 the internal resolution for one run.
 
+**F2** opens a test menu, for reaching any part of the game without playing up
+to it. Its lists are the developers' own debug files, still on the disc and
+read from your copy: play any of the game's events and cutscenes (the
+developers' event viewer list), put the story at any of its story points, or
+go to any town or dungeon. It changes the game's progress, so don't save over
+a real adventure log after using it.
+
 ## Contributing
 
 See [CONTRIBUTE.md](CONTRIBUTE.md) for the workflow, testing expectations, and rules
