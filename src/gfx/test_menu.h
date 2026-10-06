@@ -1,8 +1,8 @@
 #pragma once
 
 // What the test menu (F2) offers: the game's events, story points and places,
-// from the developers' debug lists left on the disc, and the actions that go
-// there. The runtime builds it from the game's files; the menu only draws it.
+// from the developers' debug lists left on the disc, the actions that go
+// there, and a few cheats for testing. The runtime builds it from the game's files; the menu only draws it.
 
 #include <functional>
 #include <string>
@@ -39,6 +39,11 @@ struct TestMenuData {
     std::function<void(const std::string &map, int program)> warp;
     // Whether `map` is one the game has, for the menu's free-form entry.
     std::function<bool(const std::string &map)> hasMap;
+    // Random battles on the field, on or off.
+    std::function<void(bool enabled)> setRandomEncounters;
+    std::function<bool()> randomEncounters;
+    // The whole party to level 99.
+    std::function<void()> partyToTopLevel;
 };
 
 } // namespace dq8::gfx

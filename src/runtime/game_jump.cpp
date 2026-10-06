@@ -2,10 +2,12 @@
 
 #include "game_archive.h"
 #include "ps2_runtime.h"
+#include "ps2_runtime_macros.h"
 #include "runtime/ee_scheduler.h"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -29,6 +31,25 @@ constexpr uint32_t kFieldMode = 0x3D20A8u;
 constexpr uint32_t kSetFieldMode = 0x17BB70u;
 constexpr uint32_t kFieldModeWalking = 1u;
 constexpr uint32_t kFieldModeEvent = 2u;
+// The party's records: 0x409830 is the block the game's party functions take,
+// with each character's 0x68-byte record at +0x40 (hero, Yangus, Jessica,
+// Angelo): max HP +0, HP +4, max MP +8, MP +0xC, level - 1 +0x10 (u16),
+// EXP +0x18. Each one's EXP for every level is a 100-entry table at 0x41D19C.
+constexpr uint32_t kParty = 0x409830u;
+constexpr uint32_t kPartyRecords = kParty + 0x40u;
+constexpr uint32_t kRecordBytes = 0x68u;
+constexpr uint32_t kPartySize = 4u;
+constexpr uint32_t kExpTables = 0x41D19Cu;
+constexpr uint32_t kExpTableBytes = 0x190u;
+constexpr uint32_t kTopLevelIndex = 98u; // level 99
+constexpr uint32_t kLevelUp = 0x203D80u;    // (party, character, 0): one level and its stat gains
+constexpr uint32_t kLearnSpells = 0x202650u; // (character, record, out, kind 1/2): what the level teaches
+constexpr uint32_t kAddExp = 0x204240u;     // (party, character, amount)
+constexpr uint32_t kHealHp = 0x2042F0u;     // (party, character, amount), up to max HP
+constexpr uint32_t kHealMp = 0x204280u;     // (party, character, amount), up to max MP
+// The field's random-encounter check (0x41FFD0 is its state): true when the
+// encounter countdown has run out. The field loop starts a battle on it.
+constexpr uint32_t kEncounterCheck = 0x2FA700u;
 // Guest memory for command arguments: a ring of slots, one per queued call,
 // each with the {type, value} pairs and then the strings they point to.
 constexpr uint32_t kBufferBytes = 16u * 1024u;
@@ -121,20 +142,27 @@ const std::vector<GameJump::StoryPoint> &GameJump::storyPoints() {
     return points;
 }
 
-void GameJump::callCommand(uint32_t handler, const Arg *args, uint32_t count) {
-    uint8_t *rdram = m_runtime.memory().getRDRAM();
-    if (!rdram || count > kMaxArgs)
-        return;
+uint32_t GameJump::allocateSlot() {
     std::lock_guard lock(m_mutex);
     if (m_buffer == 0u) {
         const uint32_t top = m_runtime.reserveAsyncCallbackStack(kBufferBytes, 16u);
         m_buffer = top != 0u ? top - kBufferBytes : 0u;
         if (m_buffer == 0u)
-            return;
+            return 0u;
     }
     // Calls run in order, so a slot is free again long before the ring wraps.
-    const uint32_t base = m_buffer + m_nextSlot * kSlotBytes;
+    const uint32_t slot = m_buffer + m_nextSlot * kSlotBytes;
     m_nextSlot = (m_nextSlot + 1u) % (kBufferBytes / kSlotBytes);
+    return slot;
+}
+
+void GameJump::callCommand(uint32_t handler, const Arg *args, uint32_t count) {
+    uint8_t *rdram = m_runtime.memory().getRDRAM();
+    if (!rdram || count > kMaxArgs)
+        return;
+    const uint32_t base = allocateSlot();
+    if (base == 0u)
+        return;
     // {type, value} per argument, then the strings they point to.
     uint32_t strings = base + count * 8u;
     for (uint32_t i = 0; i < count; ++i) {
@@ -178,6 +206,61 @@ void GameJump::warp(const std::string &map, int program) {
     if (mode == kFieldModeWalking)
         m_runtime.eeScheduler().requestGuestCall(kSetFieldMode, {kFieldModeEvent, 0u, 0u, 0u});
     std::fprintf(stderr, "[jump] %s, script entry %d (field mode %u)\n", map.c_str(), program, mode);
+}
+
+namespace {
+std::atomic<bool> g_encountersOff{false};
+PS2Runtime::RecompiledFunction g_encounterCheck = nullptr;
+
+void encounterCheck(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime) {
+    if (!g_encountersOff.load(std::memory_order_relaxed)) {
+        g_encounterCheck(rdram, ctx, runtime);
+        return;
+    }
+    SET_GPR_U32(ctx, 2, 0u);
+    ctx->pc = GPR_U32(ctx, 31);
+}
+} // namespace
+
+void GameJump::installHooks() {
+    if (g_encounterCheck)
+        return;
+    g_encounterCheck = m_runtime.lookupFunction(kEncounterCheck);
+    if (g_encounterCheck)
+        m_runtime.registerFunction(kEncounterCheck, encounterCheck);
+}
+
+void GameJump::setRandomEncounters(bool enabled) {
+    g_encountersOff.store(!enabled, std::memory_order_relaxed);
+    std::fprintf(stderr, "[jump] random encounters %s\n", enabled ? "on" : "off");
+}
+
+bool GameJump::randomEncounters() const {
+    return !g_encountersOff.load(std::memory_order_relaxed);
+}
+
+void GameJump::partyToTopLevel() {
+    const uint8_t *rdram = m_runtime.memory().getRDRAM();
+    EeScheduler &scheduler = m_runtime.eeScheduler();
+    for (uint32_t character = 0; character < kPartySize; ++character) {
+        const uint32_t record = kPartyRecords + character * kRecordBytes;
+        uint16_t level = 0;
+        uint32_t exp = 0, topExp = 0;
+        std::memcpy(&level, rdram + record + 0x10u, sizeof(level));
+        std::memcpy(&exp, rdram + record + 0x18u, sizeof(exp));
+        std::memcpy(&topExp, rdram + kExpTables + character * kExpTableBytes + kTopLevelIndex * 4u, sizeof(topExp));
+        // As the end of a battle does, level by level, without its messages.
+        for (uint32_t step = level; step < kTopLevelIndex; ++step)
+            scheduler.requestGuestCall(kLevelUp, {kParty, character, 0u, 0u});
+        if (topExp > exp)
+            scheduler.requestGuestCall(kAddExp, {kParty, character, topExp - exp, 0u});
+        for (uint32_t kind : {1u, 2u})
+            if (const uint32_t learned = allocateSlot())
+                scheduler.requestGuestCall(kLearnSpells, {character, record, learned, kind});
+        scheduler.requestGuestCall(kHealHp, {kParty, character, 999u, 0u});
+        scheduler.requestGuestCall(kHealMp, {kParty, character, 999u, 0u});
+    }
+    std::fprintf(stderr, "[jump] party to level 99\n");
 }
 
 std::shared_ptr<gfx::TestMenuData> GameJump::buildTestMenu(const std::string &archiveBase) {
@@ -266,12 +349,23 @@ std::shared_ptr<gfx::TestMenuData> GameJump::buildTestMenu(const std::string &ar
     data->setStory = [this](int chapter, int step) { applyStoryPoint(chapter, step); };
     data->warp = [this](const std::string &map, int program) { warp(map, program); };
     data->hasMap = [maps](const std::string &map) { return maps->count(map) != 0; };
+    data->setRandomEncounters = [this](bool enabled) { setRandomEncounters(enabled); };
+    data->randomEncounters = [this] { return randomEncounters(); };
+    data->partyToTopLevel = [this] { partyToTopLevel(); };
     std::fprintf(stderr, "[jump] F2 test menu: %zu events, %zu story points, %zu places\n", data->events.size(),
                  data->storyPoints.size(), data->places.size());
     return data;
 }
 
 void GameJump::startEnvironmentTriggers() {
+    if (std::getenv("DQ8_DEBUG_NO_ENCOUNTERS"))
+        setRandomEncounters(false);
+    if (const char *level = std::getenv("DQ8_DEBUG_LEVEL99"))
+        std::thread([this, frame = std::strtoull(level, nullptr, 10)] {
+            while (m_runtime.eeScheduler().currentVSyncTick() < frame)
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            partyToTopLevel();
+        }).detach();
     const char *story = std::getenv("DQ8_DEBUG_STORY");
     const char *warpTo = std::getenv("DQ8_DEBUG_WARP");
     if (!story && !warpTo)
