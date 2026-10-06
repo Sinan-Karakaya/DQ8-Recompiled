@@ -120,7 +120,8 @@ int main(int argc, char **argv) try {
                 backend->Submit(batch);
             // DQ8_GS_REPLAY_DUMP_DST=base: after each draw into a target at
             // that block address, write it (one file per frame, last draw wins).
-            if (const char *dst = std::getenv("DQ8_GS_REPLAY_DUMP_DST");
+            static const char *const dumpDst = std::getenv("DQ8_GS_REPLAY_DUMP_DST");
+            if (const char *dst = dumpDst;
                 dst && (batch.state.context.frame.fbp << 5u) == std::strtoul(dst, nullptr, 16)) {
                 std::vector<uint8_t> snapshot;
                 backend->SnapshotVram(snapshot);
