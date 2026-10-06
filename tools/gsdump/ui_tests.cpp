@@ -1,11 +1,14 @@
-// The in-game menu's pure parts: the settings file and the picture's fit.
+// The in-game menu's pure parts: the settings file, navigation and the
+// picture's fit.
 #include "gfx/backends/sdlgpu/sdlgpu_input.h"
 #include "gfx/backends/sdlgpu/sdlgpu_window.h"
 #include "ui/ui_settings.h"
+#include "ui/ui_widgets.h"
 
 #include <cstdio>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 using namespace dq8;
 
@@ -94,6 +97,55 @@ void defaultBindingsRoundTrip() {
             }
 }
 
+// Keyboard and gamepad reach the menu's own controls: Tab moves to each and
+// Space works it, as A does on a controller. ImGui leaves an InvisibleButton
+// out of navigation unless it asks, which once made these mouse-only.
+void keyboardReachesEveryControl() {
+    ImGuiContext *context = ImGui::CreateContext();
+    ImGuiIO &io = ImGui::GetIO();
+    io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    // No renderer: the font atlas is built on demand and never uploaded.
+    io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+    io.DisplaySize = ImVec2(800.0f, 600.0f);
+    io.DeltaTime = 1.0f / 60.0f;
+    io.IniFilename = nullptr;
+
+    bool on = false, first = true, pagePressed = false;
+    int choice = 0;
+    const char *const labels[] = {"One", "Two"};
+    const auto frame = [&] {
+        ImGui::NewFrame();
+        if (std::exchange(first, false))
+            ImGui::SetNextWindowFocus();
+        ImGui::SetNextWindowPos(ImVec2(0.0f, 0.0f));
+        ImGui::SetNextWindowSize(ImVec2(400.0f, 300.0f));
+        ImGui::Begin("controls");
+        ui::toggle("toggle", &on);
+        ui::segmented("choice", &choice, labels, 2);
+        pagePressed |= ui::navItem("Page", ui::Icon::Display, false);
+        ImGui::End();
+        ImGui::Render();
+    };
+    const auto press = [&](ImGuiKey key) {
+        io.AddKeyEvent(key, true);
+        frame();
+        io.AddKeyEvent(key, false);
+        frame();
+    };
+    frame();
+    press(ImGuiKey_Tab);
+    press(ImGuiKey_Space);
+    require(on, "Tab and Space reach a toggle");
+    press(ImGuiKey_Tab);
+    press(ImGuiKey_Tab);
+    press(ImGuiKey_Space);
+    require(choice == 1, "Tab and Space reach a segmented choice");
+    press(ImGuiKey_Tab);
+    press(ImGuiKey_Space);
+    require(pagePressed, "Tab and Space reach a settings page");
+    ImGui::DestroyContext(context);
+}
+
 void displayFits() {
     gfx::SdlGpuDisplayOptions options;
     fits(options, 1280u, 960u, 0, {0u, 0u, 1280u, 960u}, "4:3 fills a 4:3 window");
@@ -117,8 +169,9 @@ int main() try {
     settingsRoundTrip();
     malformedSettings();
     defaultBindingsRoundTrip();
+    keyboardReachesEveryControl();
     displayFits();
-    std::puts("PASS: menu settings file, bindings and picture fit");
+    std::puts("PASS: menu settings file, bindings, navigation and picture fit");
     return 0;
 } catch (const std::exception &error) {
     std::fprintf(stderr, "FAIL: %s\n", error.what());

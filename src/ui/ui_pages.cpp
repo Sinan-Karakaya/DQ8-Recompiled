@@ -34,7 +34,7 @@ ImVec4 color(ImU32 packed) { return ImGui::ColorConvertU32ToFloat4(packed); }
 bool closeButton(const char *id) {
     const float size = ImGui::GetFrameHeight();
     const ImVec2 pos = ImGui::GetCursorScreenPos();
-    const bool pressed = ImGui::InvisibleButton(id, ImVec2(size, size));
+    const bool pressed = ImGui::InvisibleButton(id, ImVec2(size, size), ImGuiButtonFlags_EnableNav);
     const ImVec2 center(pos.x + size * 0.5f, pos.y + size * 0.5f);
     ImDrawList *list = ImGui::GetWindowDrawList();
     if (ImGui::IsItemHovered())
@@ -534,7 +534,7 @@ void Overlay::drawBindingTable(bool keyboard) {
                 ImGui::PushID(static_cast<int>(index * gfx::kBindingSlots + slot));
                 const ImVec2 cell = ImGui::GetCursorScreenPos();
                 const float cellWidth = ImGui::GetContentRegionAvail().x;
-                if (ImGui::InvisibleButton("##bind", ImVec2(cellWidth, chip)))
+                if (ImGui::InvisibleButton("##bind", ImVec2(cellWidth, chip), ImGuiButtonFlags_EnableNav))
                     beginBindingCapture(input, keyboard, slot);
                 const bool over = ImGui::IsItemHovered() || ImGui::IsItemFocused();
                 if (ImGui::IsItemClicked(ImGuiMouseButton_Right)) {

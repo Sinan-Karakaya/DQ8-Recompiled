@@ -45,7 +45,8 @@ bool toggle(const char *id, bool *value) {
     const float height = std::floor(frame * 0.8f);
     const float width = std::floor(height * 1.9f);
     const ImVec2 pos = ImGui::GetCursorScreenPos();
-    const bool pressed = ImGui::InvisibleButton(id, ImVec2(width, frame));
+    // InvisibleButton leaves keyboard and gamepad navigation out unless asked.
+    const bool pressed = ImGui::InvisibleButton(id, ImVec2(width, frame), ImGuiButtonFlags_EnableNav);
     if (pressed)
         *value = !*value;
     const float t = animate(ImGui::GetItemID(), *value ? 1.0f : 0.0f);
@@ -82,7 +83,7 @@ bool segmented(const char *id, int *value, const char *const *labels, int count,
         ImGui::SetCursorScreenPos(at);
         ImGui::PushID(index);
         ImGui::BeginDisabled(!usable);
-        if (ImGui::InvisibleButton("##choice", ImVec2(segment, height)) && !chosen) {
+        if (ImGui::InvisibleButton("##choice", ImVec2(segment, height), ImGuiButtonFlags_EnableNav) && !chosen) {
             *value = index;
             changed = true;
         }
@@ -161,7 +162,7 @@ bool navItem(const char *label, Icon kind, bool selected) {
     const float width = ImGui::GetContentRegionAvail().x;
     const ImVec2 pos = ImGui::GetCursorScreenPos();
     ImGui::PushID(label);
-    const bool pressed = ImGui::InvisibleButton("##page", ImVec2(width, height));
+    const bool pressed = ImGui::InvisibleButton("##page", ImVec2(width, height), ImGuiButtonFlags_EnableNav);
     ImGui::PopID();
     const bool hovered = ImGui::IsItemHovered();
     const float y = pos.y + height * 0.5f;
