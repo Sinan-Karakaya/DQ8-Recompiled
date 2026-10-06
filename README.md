@@ -42,6 +42,7 @@ input.
 | Internal resolution | 1x (512x448, original) to 8x, applied immediately |
 | Aspect ratio | Auto (default: follows the game's Screen Size), 4:3, 16:9, square pixels (8:7), fill window |
 | Upscaling filter | Sharp bilinear (default), bilinear, nearest (integer scale) |
+| Sharper picture | On by default: drops the PS2's one-line display blend (deflicker), which only blurs on a PC monitor |
 | Window | Fullscreen (also F11), frame-rate counter |
 
 Widescreen is built into DQ8: set *Screen Size* to *Wide Screen 16:9* in the
