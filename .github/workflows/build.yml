@@ -227,7 +227,7 @@ jobs:
             -DDQ8_GFX_ENABLE_SDLGPU=ON
           cmake --build build/ci-gpu --target dq8-gsreplay dq8-gs-trace-replay \
             dq8-gs-threaded-tests dq8-gs-transfer-tests dq8-sdlgpu-input-tests \
-            dq8-sdlgpu-raster-tests dq8-movie-upload-tests
+            dq8-sdlgpu-raster-tests dq8-movie-upload-tests dq8-ui-tests dq8-ui-preview
 
       - name: Run graphics tests
         run: |

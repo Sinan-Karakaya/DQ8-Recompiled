@@ -41,9 +41,10 @@ contributions are welcome.
 | --- | --- |
 | `src/runtime` | Launcher, overlay dispatch, and game-specific integration |
 | `src/gfx` | GS state, memory, trace replay, and SDL GPU renderer |
+| `src/ui` | In-game menu (F1): display, sound, controls and quality-of-life settings |
 | `config` | Version-specific function maps and recompiler settings |
 | `tools` | Extraction, analysis, code generation, and tests |
-| `thirdparty` | Pinned PS2Recomp and SIMDe submodules |
+| `thirdparty` | Pinned PS2Recomp, SIMDe and Dear ImGui submodules |
 
 Documentation is maintained in the
 [wiki](https://github.com/Sinan-Karakaya/DQ8-Recompiled/wiki).

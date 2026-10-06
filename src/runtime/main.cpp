@@ -19,14 +19,18 @@
 #include "runtime/ps2_native_iop.h"
 #include "runtime/gs/gs_frontend.h"
 #include "runtime/gs/gs_threaded_backend.h"
+#include "screen_size.h"
 #include "vu_bounds.h"
 #include "../../tools/runtime/render_cadence.h"
 
 #if defined(DQ8_HAS_SDLGPU)
 #include "gfx/backends/sdlgpu/sdlgpu_backend.h"
 #include "gfx/gsdump/gs_backend_trace.h"
+#include "ui/ui_overlay.h"
 #include "../../tools/runtime/gs_fan_probe.h"
 #include "runtime/ps2_pad_host.h"
+
+#include <utility>
 
 namespace
 {
@@ -44,6 +48,42 @@ namespace
         backend->hostPadState(held, pressed, sticks);
         ps2PadPublishHostState(held, pressed, sticks);
         return true;
+    }
+
+    // The size the player left the window at, or 4:3 at most of the desktop.
+    std::pair<uint32_t, uint32_t> initialWindowSize(const dq8::ui::Settings &settings)
+    {
+        if (settings.windowWidth >= 320 && settings.windowHeight >= 240)
+        {
+            return {static_cast<uint32_t>(settings.windowWidth), static_cast<uint32_t>(settings.windowHeight)};
+        }
+        SDL_Rect usable{0, 0, 1280, 960};
+        SDL_GetDisplayUsableBounds(SDL_GetPrimaryDisplay(), &usable);
+        const uint32_t height = static_cast<uint32_t>(std::max(448.0f, usable.h * 0.8f));
+        return {height * 4u / 3u, height};
+    }
+
+    std::unique_ptr<dq8::ui::Overlay> createMenu(dq8::gfx::SdlGpuBackend &backend, dq8::ui::Settings settings,
+                                                 const std::string &settingsPath, bool sound)
+    {
+        dq8::ui::HostServices host;
+        host.version = DQ8_VERSION;
+        // --mute keeps the game silent whatever the menu's volume says.
+        host.setVolume = [sound](float volume) { ps2_native_iop::setVolume(sound ? volume : 0.0f); };
+        host.completedRenders = [] {
+            return dq8::diagnostics::RenderCadenceProbe::instance().publishedCompletedRoutines();
+        };
+        host.guestFrame = [] { return ps2PadCurrentGuestFrame(); };
+        auto menu = std::make_unique<dq8::ui::Overlay>(backend, std::move(settings), settingsPath, std::move(host));
+        std::string error;
+        if (!menu->initialize(backend.window(), backend.windowTextureFormat(), error))
+        {
+            std::fprintf(stderr, "[dq8] in-game menu unavailable: %s\n", error.c_str());
+            return nullptr;
+        }
+        menu->applySettings();
+        backend.setOverlay(menu.get());
+        return menu;
     }
 }
 #endif
@@ -73,7 +113,7 @@ int main(int argc, char **argv)
     bool tracePrintf = false;
     bool sound = true;
     std::string rasterBackend = "sw";
-    uint32_t resolutionScale = 1u;
+    uint32_t resolutionScale = 0u; // 0: the menu's saved setting
 
     for (int i = 1; i < argc; ++i)
     {
@@ -113,7 +153,8 @@ int main(int argc, char **argv)
                         "  --iso=PATH       disc image for sector reads, including HD6 archives\n"
                         "  --cd-root=DIR    cdrom0: directory (default: the ELF's directory)\n"
                         "  --gs=BACKEND     raster backend: sw (default) or sdlgpu\n"
-                        "  --scale=N        internal resolution multiplier for --gs=sdlgpu\n"
+                        "  --scale=N        internal resolution multiplier for --gs=sdlgpu, for this run\n"
+                        "                   (default: the in-game menu's setting)\n"
                         "  --mute           run the sound driver without playing anything\n"
                         "  --trace-printf   restore retail debug logging through the guest formatter\n"
                         "                   Set PS2X_DECI2_LOG_LIMIT=0 to remove the log limit.\n",
@@ -145,14 +186,23 @@ int main(int argc, char **argv)
     // its own window: with a presenter installed it opens none, and raylib is
     // never initialised at all.
     std::unique_ptr<dq8::gfx::SdlGpuBackend> sdlBackend;
+    // Declared after the runtime, so it goes before the backend it draws with.
+    std::unique_ptr<dq8::ui::Overlay> menu;
     std::string backendError;
     if (rasterBackend == "sdlgpu")
     {
         sdlBackend = dq8::gfx::createSdlGpuBackend(backendError);
         if (sdlBackend)
         {
-            sdlBackend->setResolutionScale(resolutionScale);
-            const uint32_t scale = sdlBackend->resolutionScale();
+            dq8::ui::Settings settings;
+            const std::string settingsPath = dq8::ui::defaultSettingsPath();
+            if (!dq8::ui::loadSettings(settingsPath, settings))
+            {
+                std::fprintf(stderr, "[dq8] could not read %s; using default settings\n", settingsPath.c_str());
+            }
+            // --scale is for this run; the saved setting stays as it was.
+            sdlBackend->setResolutionScale(resolutionScale != 0u ? resolutionScale : settings.resolutionScale);
+            const auto [width, height] = initialWindowSize(settings);
             std::string windowError;
             // Allow renderer comparisons using the runtime's presenter.
             const char *noWindow = std::getenv("DQ8_GFX_NO_WINDOW");
@@ -160,7 +210,7 @@ int main(int argc, char **argv)
             {
                 std::printf("[dq8] DQ8_GFX_NO_WINDOW: presenting through the runtime\n");
             }
-            else if (!sdlBackend->openWindow("DQ8Recomp", 640u * scale, 448u * scale, windowError))
+            else if (!sdlBackend->openWindow("DQ8Recomp", width, height, windowError))
             {
                 std::fprintf(stderr,
                              "[dq8] could not open a window (%s); presenting through "
@@ -170,6 +220,7 @@ int main(int argc, char **argv)
             else
             {
                 runtime.setExternalPresenter(&pumpSdlGpuPresenter, sdlBackend.get());
+                menu = createMenu(*sdlBackend, std::move(settings), settingsPath, sound);
             }
         }
     }
@@ -320,15 +371,29 @@ int main(int argc, char **argv)
 #endif
 
     std::printf("[dq8] starting execution at 0x%08X\n", entryPoint);
-    [[maybe_unused]] const bool renderCounterReady = dq8::diagnostics::configureRenderCadenceProbe(runtime);
 #if defined(DQ8_HAS_SDLGPU)
-    if (renderCounterReady && sdlWindowBackend)
+    // Both feed the window's menu, so they are installed only with one.
+    const bool hasMenu = menu != nullptr;
+    if (hasMenu && dq8::installScreenSizeProbe(runtime))
+        sdlWindowBackend->setGameWidescreenQuery(&dq8::gameScreenSize);
+#else
+    const bool hasMenu = false;
+#endif
+    [[maybe_unused]] const bool renderCounterReady =
+        dq8::diagnostics::configureRenderCadenceProbe(runtime, hasMenu);
+#if defined(DQ8_HAS_SDLGPU)
+    if (renderCounterReady && sdlWindowBackend && sdlWindowBackend->hasWindow())
         sdlWindowBackend->setCompletedRenderCounter([] {
             return dq8::diagnostics::RenderCadenceProbe::instance().publishedCompletedRoutines();
         });
 #endif
     runtime.run();
 
+#if defined(DQ8_HAS_SDLGPU)
+    if (sdlWindowBackend)
+        sdlWindowBackend->setOverlay(nullptr);
+    menu.reset();
+#endif
     std::printf("[dq8] PS2Runtime::run() returned\n");
     return 0;
 }

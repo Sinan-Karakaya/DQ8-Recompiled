@@ -17,6 +17,10 @@ PS2Recomp: https://github.com/ran-j/PS2Recomp (GNU GPL v3)
   License: thirdparty/PS2Recomp/LICENSE
 SIMDe: https://github.com/simd-everywhere/simde (MIT)
   License: thirdparty/simde/COPYING
+Dear ImGui: https://github.com/ocornut/imgui (MIT)
+  License: thirdparty/imgui/LICENSE.txt
+Roboto Medium, from Dear ImGui's misc/fonts, embedded in the in-game menu
+  (Apache License 2.0; see thirdparty/imgui/docs/FONTS.md)
 
 PCSX2 (https://github.com/PCSX2/pcsx2) is a reference for GS dump compatibility
 and renderer validation. Its source is licensed under GPL-3.0-or-later; retain

@@ -73,6 +73,9 @@ int main()
             setEnvironment("DQ8_RENDER_CADENCE", nullptr);
             t.IsTrue(!probe.configure(*runtime), "disabled probe installs no wrappers");
             t.IsTrue(runtime->lookupFunction(entry) == fakeRender, "original remains installed");
+            t.IsTrue(probe.configure(*runtime, true), "the menu's counter installs it without logging");
+            t.IsTrue(runtime->lookupFunction(entry) != fakeRender, "counter wrappers are installed");
+            registerRange(*runtime, fakeRender);
             setEnvironment("DQ8_RENDER_CADENCE", "1");
             runtime->replaceFunction(resume, unrelated);
             t.IsTrue(!probe.configure(*runtime), "unexpected interior rejects the whole installation");
