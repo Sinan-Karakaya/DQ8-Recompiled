@@ -6,12 +6,15 @@
 #pragma once
 
 #include "runtime/gs/gs_backend.h"
+#include "gfx/backends/sdlgpu/sdlgpu_window.h"
 
 #include <cstdint>
 #include <memory>
 #include <string>
 
 namespace dq8::gfx {
+
+class SdlPadInput;
 
 struct SdlGpuStats {
     uint64_t presents = 0u;
@@ -127,6 +130,11 @@ public:
     // discards every render target, so it is set once at startup in practice.
     void setResolutionScale(uint32_t scale);
     uint32_t resolutionScale() const;
+    // A change while the game runs: the next PreparePresentation, which is
+    // ordered with the GS work, resolves the targets and rebuilds them.
+    void requestResolutionScale(uint32_t scale);
+    // The scale in use; any thread, without the backend lock.
+    uint32_t activeResolutionScale() const;
 
     // Opens a window and claims it for the GPU device. Present() then composes
     // straight into the swapchain and reports BackendNative, so the frame never
@@ -136,11 +144,35 @@ public:
     // Install before execution. The callback reads a thread-safe game counter.
     using CompletedRenderCounter = uint64_t (*)();
     void setCompletedRenderCounter(CompletedRenderCounter counter);
-    // Pumps SDL events. Returns false when the window wants to close.
+    // The game's Screen Size option for SdlGpuAspect::Auto, read on the
+    // presenting thread: 1 for 16:9, 0 for 4:3, -1 unknown.
+    using GameWidescreenQuery = int (*)();
+    void setGameWidescreenQuery(GameWidescreenQuery query);
+    int gameWidescreen() const;
+    // Pumps SDL events into the overlay and the pad, and redraws the overlay
+    // over the last frame while the game shows none. Returns false when the
+    // window wants to close.
     bool pumpEvents();
     // Host keyboard/gamepad state in the runtime's pad encoding, sampled by
     // pumpEvents. Only meaningful when this backend owns the window.
     void hostPadState(uint32_t &held, uint32_t &pressed, uint32_t &sticks) const;
+
+    // The rest belongs to the thread that opened the window. The overlay must
+    // outlive its installation; install null before destroying it.
+    void setOverlay(SdlGpuOverlay *overlay);
+    void setDisplayOptions(const SdlGpuDisplayOptions &options);
+    const SdlGpuDisplayOptions &displayOptions() const;
+    // False when the window cannot present in that mode; VSync is used instead.
+    bool supportsPresentMode(SDL_GPUPresentMode mode) const;
+    SDL_Window *window() const;
+    SDL_GPUDevice *gpuDevice() const;
+    SDL_GPUTextureFormat windowTextureFormat() const;
+    SdlPadInput &padInput();
+    // Where the game picture was drawn at the last frame, in window pixels.
+    SdlGpuRect displayRect() const;
+    // Delivers the next frame shown: the game picture as displayed, or the
+    // whole window with the overlay.
+    void requestCapture(bool withOverlay, SdlGpuCaptureCallback done);
 
     bool deviceReady() const;
     std::string driverName() const;
