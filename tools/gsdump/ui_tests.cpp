@@ -47,6 +47,7 @@ void settingsRoundTrip() {
     settings.pad.keyboardEnabled = false;
     settings.pad.controllers = gfx::ControllerSelection::One;
     settings.pad.controllerGuid = "030000004c050000e60c000000016800";
+    settings.pad.controllerSerial = "a0:ab:51:12:34:56";
     settings.pad.controllerName = "DualSense Wireless Controller";
     settings.pad.stickDeadZone = 0.2f;
     settings.pad.triggerThreshold = 0.5f;

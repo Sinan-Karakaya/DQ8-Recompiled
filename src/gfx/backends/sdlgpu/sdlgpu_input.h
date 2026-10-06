@@ -45,9 +45,14 @@ struct PadConfig {
     std::array<PadBindingSlots, kPadInputCount> keyboard{};
     bool keyboardEnabled = true;
     ControllerSelection controllers = ControllerSelection::Any;
-    // ControllerSelection::One; the name is shown while it is disconnected.
+    // ControllerSelection::One: the model, and the serial where the device
+    // reports one; the name is shown while it is disconnected.
     std::string controllerGuid;
+    std::string controllerSerial;
     std::string controllerName;
+    // Not saved: the device picked this session, which tells identical
+    // controllers without a serial apart until it disconnects.
+    SDL_JoystickID controllerInstance = 0;
     float stickDeadZone = 0.125f;
     float triggerThreshold = 0.25f;
     bool invertCameraX = false;
@@ -66,6 +71,7 @@ struct ControllerInfo {
     SDL_JoystickID id = 0;
     std::string name;
     std::string guid;
+    std::string serial; // empty when the device reports none
     SDL_GamepadType type = SDL_GAMEPAD_TYPE_UNKNOWN;
     bool active = false; // drives the game under the current selection
     SDL_PowerState power = SDL_POWERSTATE_UNKNOWN;
@@ -114,6 +120,7 @@ private:
     struct Gamepad {
         SDL_Gamepad *handle = nullptr;
         std::string guid;
+        std::string serial;
         std::array<bool, SDL_GAMEPAD_AXIS_COUNT * 2> axisPressed{};
     };
     PadSnapshot sample(const bool *keys) const;
@@ -121,6 +128,8 @@ private:
     void openAll();
     void clearState();
     bool gamepadActive(const Gamepad &gamepad) const;
+    // The one that plays under ControllerSelection::One, if connected.
+    const Gamepad *chosenGamepad() const;
     Gamepad *findGamepad(SDL_JoystickID id);
 
     PadConfig m_config = PadConfig::defaults();

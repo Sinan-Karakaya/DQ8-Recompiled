@@ -232,7 +232,8 @@ void SdlPadInput::openGamepad(SDL_JoystickID id) {
         return;
     char guid[64] = {};
     SDL_GUIDToString(SDL_GetGamepadGUIDForID(id), guid, sizeof(guid));
-    m_gamepads.push_back({handle, guid, {}});
+    const char *serial = SDL_GetGamepadSerial(handle);
+    m_gamepads.push_back({handle, guid, serial ? serial : "", {}});
     std::fprintf(stderr, "[pad] connected: %s\n", SDL_GetGamepadName(handle));
 }
 
@@ -255,17 +256,27 @@ bool SdlPadInput::gamepadActive(const Gamepad &gamepad) const {
     switch (m_config.controllers) {
     case ControllerSelection::Any:
         return true;
-    case ControllerSelection::One: {
-        // The first connected controller of the chosen model drives the game.
-        for (const auto &candidate : m_gamepads)
-            if (candidate.guid == m_config.controllerGuid)
-                return &candidate == &gamepad;
-        return false;
-    }
+    case ControllerSelection::One:
+        return chosenGamepad() == &gamepad;
     case ControllerSelection::None:
         break;
     }
     return false;
+}
+
+const SdlPadInput::Gamepad *SdlPadInput::chosenGamepad() const {
+    // The device picked this session; else the saved serial, which must
+    // match when there is one; else the first connected of the model.
+    const Gamepad *found = nullptr;
+    for (const auto &candidate : m_gamepads) {
+        if (candidate.guid != m_config.controllerGuid)
+            continue;
+        if (m_config.controllerInstance != 0 && SDL_GetGamepadID(candidate.handle) == m_config.controllerInstance)
+            return &candidate;
+        if (!found && (m_config.controllerSerial.empty() || candidate.serial == m_config.controllerSerial))
+            found = &candidate;
+    }
+    return found;
 }
 
 void SdlPadInput::clearState() {
@@ -294,6 +305,7 @@ std::vector<ControllerInfo> SdlPadInput::controllers() const {
         const char *name = SDL_GetGamepadName(gamepad.handle);
         info.name = name ? name : "Controller";
         info.guid = gamepad.guid;
+        info.serial = gamepad.serial;
         info.type = SDL_GetGamepadType(gamepad.handle);
         info.active = gamepadActive(gamepad);
         info.power = SDL_GetGamepadPowerInfo(gamepad.handle, &info.batteryPercent);

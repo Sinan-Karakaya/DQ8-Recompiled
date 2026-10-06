@@ -377,7 +377,7 @@ void Overlay::drawControlsPage() {
             preview = "No controller";
         } else if (config.controllers == gfx::ControllerSelection::One) {
             const bool connected = std::any_of(controllers.begin(), controllers.end(),
-                                               [&](const auto &c) { return c.guid == config.controllerGuid; });
+                                               [](const auto &c) { return c.active; });
             preview = config.controllerName + (connected ? "" : "  (not connected)");
         }
         if (ImGui::BeginCombo("##controller", preview.c_str())) {
@@ -388,12 +388,15 @@ void Overlay::drawControlsPage() {
             for (size_t index = 0; index < controllers.size(); ++index) {
                 const auto &controller = controllers[index];
                 ImGui::PushID(static_cast<int>(index));
-                const bool chosen = config.controllers == gfx::ControllerSelection::One &&
-                                    config.controllerGuid == controller.guid;
+                // Identical controllers share a GUID, so the device in use is
+                // what marks the choice, and the pick remembers the device.
+                const bool chosen = config.controllers == gfx::ControllerSelection::One && controller.active;
                 if (ImGui::Selectable(controller.name.c_str(), chosen)) {
                     config.controllers = gfx::ControllerSelection::One;
                     config.controllerGuid = controller.guid;
+                    config.controllerSerial = controller.serial;
                     config.controllerName = controller.name;
+                    config.controllerInstance = controller.id;
                     changed = true;
                 }
                 ImGui::PopID();

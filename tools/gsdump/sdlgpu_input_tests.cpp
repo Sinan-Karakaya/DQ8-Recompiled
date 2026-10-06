@@ -97,7 +97,39 @@ int main() try {
     require(SDL_GetGamepadFromID(id) != nullptr, "controller reconnects");
     require(SDL_DetachVirtualJoystick(id), "detach reconnected controller");
     read(pad);
-    std::puts("PASS: SDL pad keyboard, analog, buttons, latching, focus and hotplug");
+
+    // Two controllers of one model share a GUID: the one picked plays, and
+    // only it, until a restart forgets which device that was.
+    const auto firstId = attach(), secondId = attach();
+    read(pad);
+    auto listed = pad.controllers();
+    require(listed.size() == 2u && listed[0].guid == listed[1].guid, "identical controllers share a GUID");
+    dq8::gfx::PadConfig config = pad.config();
+    config.controllers = dq8::gfx::ControllerSelection::One;
+    config.controllerGuid = listed[1].guid;
+    config.controllerSerial = listed[1].serial;
+    config.controllerInstance = listed[1].id;
+    pad.setConfig(config);
+    listed = pad.controllers();
+    require(!listed[0].active && listed[1].active, "the controller picked plays, not the first of its model");
+    SDL_Joystick *firstPad = SDL_OpenJoystick(firstId), *secondPad = SDL_OpenJoystick(secondId);
+    require(firstPad && secondPad, "open both virtual joysticks");
+    SDL_SetJoystickVirtualButton(firstPad, SDL_GAMEPAD_BUTTON_SOUTH, true);
+    require(!(read(pad).held & 0x4000u), "the other controller of the model is ignored");
+    SDL_SetJoystickVirtualButton(firstPad, SDL_GAMEPAD_BUTTON_SOUTH, false);
+    SDL_SetJoystickVirtualButton(secondPad, SDL_GAMEPAD_BUTTON_SOUTH, true);
+    require((read(pad).held & 0x4000u) != 0u, "the picked controller reaches the game");
+    SDL_SetJoystickVirtualButton(secondPad, SDL_GAMEPAD_BUTTON_SOUTH, false);
+    read(pad);
+    config.controllerInstance = 0; // as after a restart, with no serial to go by
+    pad.setConfig(config);
+    listed = pad.controllers();
+    require(listed[0].active && !listed[1].active, "without a serial, the first of the model plays");
+    SDL_CloseJoystick(firstPad);
+    SDL_CloseJoystick(secondPad);
+    require(SDL_DetachVirtualJoystick(firstId) && SDL_DetachVirtualJoystick(secondId), "detach both controllers");
+    read(pad);
+    std::puts("PASS: SDL pad keyboard, analog, buttons, latching, focus, hotplug and the picked controller");
     return 0;
 } catch (const std::exception &error) {
     std::fprintf(stderr, "FAIL: %s\n", error.what());

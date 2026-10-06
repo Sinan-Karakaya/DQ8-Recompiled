@@ -106,6 +106,7 @@ void apply(Settings &s, const std::string &section, const std::string &key, cons
         if (key == "keyboard") parseBool(value, s.pad.keyboardEnabled);
         else if (key == "controller") parseNamed(kSelections, value, s.pad.controllers);
         else if (key == "controller_guid") s.pad.controllerGuid = value;
+        else if (key == "controller_serial") s.pad.controllerSerial = value;
         else if (key == "controller_name") s.pad.controllerName = value;
         else if (key == "stick_dead_zone") {
             float percent = s.pad.stickDeadZone * 100.0f;
@@ -149,7 +150,8 @@ std::string serializeSettings(const Settings &s) {
         << "\nmute_in_background = " << flag(s.muteInBackground) << "\n\n"
         << "[controls]\nkeyboard = " << flag(s.pad.keyboardEnabled)
         << "\ncontroller = " << nameOf(kSelections, s.pad.controllers)
-        << "\ncontroller_guid = " << s.pad.controllerGuid << "\ncontroller_name = " << s.pad.controllerName
+        << "\ncontroller_guid = " << s.pad.controllerGuid << "\ncontroller_serial = " << s.pad.controllerSerial
+        << "\ncontroller_name = " << s.pad.controllerName
         << "\nstick_dead_zone = " << s.pad.stickDeadZone * 100.0f
         << "\ntrigger_threshold = " << s.pad.triggerThreshold * 100.0f
         << "\ninvert_camera_x = " << flag(s.pad.invertCameraX)
