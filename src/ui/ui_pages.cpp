@@ -259,6 +259,12 @@ void Overlay::drawDisplayPage() {
             m_backend.setDisplayOptions(m_settings.display);
             markDirty();
         }
+
+        settingRow("Sharper picture", "Drops the PS2's line blending, a deflicker for TVs that only blurs on a monitor.");
+        if (toggle("sharper", &m_settings.display.removeLineBlend)) {
+            m_backend.setDisplayOptions(m_settings.display);
+            markDirty();
+        }
         endSettings();
     }
 }

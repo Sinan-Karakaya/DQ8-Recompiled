@@ -97,6 +97,7 @@ void apply(Settings &s, const std::string &section, const std::string &key, cons
         else if (key == "aspect") parseNamed(kAspects, value, s.display.aspect);
         else if (key == "filter") parseNamed(kFilters, value, s.display.filter);
         else if (key == "integer_scale") parseBool(value, s.display.integerScale);
+        else if (key == "remove_line_blend") parseBool(value, s.display.removeLineBlend);
         else if (key == "present") parseNamed(kPresentModes, value, s.display.presentMode);
     } else if (section == "sound") {
         if (key == "volume") parseNumber(value, s.volume, 0, 100);
@@ -145,6 +146,7 @@ std::string serializeSettings(const Settings &s) {
         << "[display]\nscale = " << s.resolutionScale << "\naspect = " << nameOf(kAspects, s.display.aspect)
         << "\nfilter = " << nameOf(kFilters, s.display.filter)
         << "\ninteger_scale = " << flag(s.display.integerScale)
+        << "\nremove_line_blend = " << flag(s.display.removeLineBlend)
         << "\npresent = " << nameOf(kPresentModes, s.display.presentMode) << "\n\n"
         << "[sound]\nvolume = " << s.volume << "\nmuted = " << flag(s.muted)
         << "\nmute_in_background = " << flag(s.muteInBackground) << "\n\n"

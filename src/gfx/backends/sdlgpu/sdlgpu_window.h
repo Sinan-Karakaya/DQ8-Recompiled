@@ -30,6 +30,9 @@ struct SdlGpuDisplayOptions {
     // Whole multiples of the picture's height, so scanlines stay even.
     bool integerScale = false;
     SDL_GPUPresentMode presentMode = SDL_GPU_PRESENTMODE_VSYNC;
+    // Shows both display circuits at one origin, which leaves DQ8's one-line
+    // deflicker blend a no-op. Off is the PS2's own picture.
+    bool removeLineBlend = false;
     bool operator==(const SdlGpuDisplayOptions &) const = default;
 };
 

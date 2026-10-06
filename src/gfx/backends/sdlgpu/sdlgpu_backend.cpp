@@ -3065,6 +3065,7 @@ void SdlGpuBackend::setOverlay(SdlGpuOverlay *overlay) {
 
 void SdlGpuBackend::setDisplayOptions(const SdlGpuDisplayOptions &options) {
     m_impl->displayOptions = options;
+    m_impl->removeLineBlend.store(options.removeLineBlend, std::memory_order_relaxed);
 }
 
 const SdlGpuDisplayOptions &SdlGpuBackend::displayOptions() const {
