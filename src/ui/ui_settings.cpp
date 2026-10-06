@@ -67,9 +67,10 @@ void parseBool(const std::string &text, bool &out) {
 template <typename T>
 void parseNumber(const std::string &text, T &out, T low, T high) {
     char *end = nullptr;
-    const double value = std::strtod(text.c_str(), &end);
-    if (end != text.c_str() && *end == '\0')
-        out = static_cast<T>(std::clamp(value, double(low), double(high)));
+    const double value = std::clamp(std::strtod(text.c_str(), &end), double(low), double(high));
+    // NaN comes through the clamp unchanged; the range check turns it away.
+    if (end != text.c_str() && *end == '\0' && value >= double(low) && value <= double(high))
+        out = static_cast<T>(value);
 }
 
 // "cross.1" in [controller] or [keyboard]: slot 1 or 2 of one pad input.
@@ -78,10 +79,12 @@ void parseBinding(gfx::PadConfig &pad, bool keyboard, const std::string &key, co
     if (dot == std::string::npos || dot + 2u != key.size() || (key[dot + 1u] != '1' && key[dot + 1u] != '2'))
         return;
     const std::string name = key.substr(0, dot);
+    const auto binding = gfx::padBindingFromString(value);
+    if (!binding)
+        return; // unreadable: the binding stays as it was
     for (size_t input = 0; input < gfx::kPadInputCount; ++input)
         if (name == gfx::padInputKey(static_cast<PadInput>(input)))
-            pad.slots(static_cast<PadInput>(input), keyboard)[key[dot + 1u] - '1'] =
-                gfx::padBindingFromString(value);
+            pad.slots(static_cast<PadInput>(input), keyboard)[key[dot + 1u] - '1'] = *binding;
 }
 
 void apply(Settings &s, const std::string &section, const std::string &key, const std::string &value) {
@@ -226,7 +229,11 @@ bool saveSettings(const std::string &path, const Settings &settings) {
         if (!file.flush())
             return false;
     }
-    return std::rename(temporary.c_str(), path.c_str()) == 0;
+    // Unlike std::rename on Windows, SDL_RenamePath replaces the old file.
+    if (SDL_RenamePath(temporary.c_str(), path.c_str()))
+        return true;
+    SDL_RemovePath(temporary.c_str());
+    return false;
 }
 
 } // namespace dq8::ui

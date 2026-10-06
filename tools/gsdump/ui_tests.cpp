@@ -6,8 +6,10 @@
 #include "ui/ui_widgets.h"
 
 #include <cstdio>
+#include <filesystem>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <utility>
 
 using namespace dq8;
@@ -85,6 +87,34 @@ void malformedSettings() {
     require(settings.display.aspect == gfx::SdlGpuAspect::Auto, "an unknown aspect keeps the default");
     require(settings.volume == 100, "a non-numeric volume keeps the default");
     require(settings.pad.keyboard == gfx::PadConfig::defaults().keyboard, "bad binding keys change nothing");
+
+    // Values that parse as something else keep what was there.
+    ui::parseSettings("[sound]\nvolume = nan\n[controls]\ntrigger_threshold = nan\nstick_dead_zone = -nan\n"
+                      "[controller]\ncross.1 = button:bogus\ncross.2 = key:NotAKey\ncircle.1 = sideways\n",
+                      settings);
+    const gfx::PadConfig defaults = gfx::PadConfig::defaults();
+    require(settings.volume == 100, "a NaN volume keeps the default");
+    require(settings.pad.triggerThreshold == defaults.triggerThreshold, "a NaN threshold keeps the default");
+    require(settings.pad.stickDeadZone == defaults.stickDeadZone, "a NaN dead zone keeps the default");
+    require(settings.pad.controller == defaults.controller, "unreadable bindings keep the old ones");
+    require(!gfx::padBindingFromString("key:NotAKey") && !gfx::padBindingFromString("sideways"),
+            "unreadable binding text gives nothing");
+    ui::parseSettings("[controller]\ncross.1 = none\n", settings);
+    require(!settings.pad.slots(gfx::PadInput::Cross, false)[0].bound(), "'none' still clears a binding");
+}
+
+// Saving again replaces the file, as every autosave after the first does.
+void saveOverExisting() {
+    const auto folder = std::filesystem::temp_directory_path() / "dq8-ui-tests";
+    const std::string path = (folder / "settings.ini").string();
+    ui::Settings settings;
+    require(ui::saveSettings(path, settings), "settings save to a new file");
+    settings.volume = 7;
+    require(ui::saveSettings(path, settings), "settings save over the old file");
+    ui::Settings loaded;
+    require(ui::loadSettings(path, loaded) && loaded.volume == 7, "the second save is the one read back");
+    std::error_code error;
+    std::filesystem::remove_all(folder, error);
 }
 
 void defaultBindingsRoundTrip() {
@@ -168,6 +198,7 @@ void displayFits() {
 int main() try {
     settingsRoundTrip();
     malformedSettings();
+    saveOverExisting();
     defaultBindingsRoundTrip();
     keyboardReachesEveryControl();
     displayFits();

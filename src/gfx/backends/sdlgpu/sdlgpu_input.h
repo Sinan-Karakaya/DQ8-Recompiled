@@ -3,6 +3,7 @@
 #include <SDL3/SDL.h>
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -83,7 +84,8 @@ const char *padInputName(PadInput input);
 // Stable lower-case names for settings files.
 const char *padInputKey(PadInput input);
 std::string padBindingToString(const PadBinding &binding);
-PadBinding padBindingFromString(const std::string &text);
+// "none" is the empty binding; text that names no input gives nothing.
+std::optional<PadBinding> padBindingFromString(const std::string &text);
 
 // Main-thread SDL input, published in the PS2 pad report's button/axis encoding.
 class SdlPadInput {

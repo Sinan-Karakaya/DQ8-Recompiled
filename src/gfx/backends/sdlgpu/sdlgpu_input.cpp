@@ -181,26 +181,28 @@ std::string padBindingToString(const PadBinding &binding) {
     return "none";
 }
 
-PadBinding padBindingFromString(const std::string &text) {
+std::optional<PadBinding> padBindingFromString(const std::string &text) {
+    if (text == "none")
+        return PadBinding{};
     const auto colon = text.find(':');
     if (colon == std::string::npos)
-        return {};
+        return std::nullopt;
     const std::string kind = text.substr(0, colon);
     std::string name = text.substr(colon + 1);
     if (kind == "key") {
-        const SDL_Scancode scancode = SDL_GetScancodeFromName(name.c_str());
-        return scancode != SDL_SCANCODE_UNKNOWN ? PadBinding::key(scancode) : PadBinding{};
-    }
-    if (kind == "button") {
-        const SDL_GamepadButton button = SDL_GetGamepadButtonFromString(name.c_str());
-        return button != SDL_GAMEPAD_BUTTON_INVALID ? PadBinding::button(button) : PadBinding{};
-    }
-    if (kind == "axis" && name.size() > 1u && (name[0] == '+' || name[0] == '-')) {
+        if (const SDL_Scancode scancode = SDL_GetScancodeFromName(name.c_str()); scancode != SDL_SCANCODE_UNKNOWN)
+            return PadBinding::key(scancode);
+    } else if (kind == "button") {
+        if (const SDL_GamepadButton button = SDL_GetGamepadButtonFromString(name.c_str());
+            button != SDL_GAMEPAD_BUTTON_INVALID)
+            return PadBinding::button(button);
+    } else if (kind == "axis" && name.size() > 1u && (name[0] == '+' || name[0] == '-')) {
         const int direction = name[0] == '-' ? -1 : 1;
-        const SDL_GamepadAxis axis = SDL_GetGamepadAxisFromString(name.c_str() + 1);
-        return axis != SDL_GAMEPAD_AXIS_INVALID ? PadBinding::axis(axis, direction) : PadBinding{};
+        if (const SDL_GamepadAxis axis = SDL_GetGamepadAxisFromString(name.c_str() + 1);
+            axis != SDL_GAMEPAD_AXIS_INVALID)
+            return PadBinding::axis(axis, direction);
     }
-    return {};
+    return std::nullopt;
 }
 
 SdlPadInput::~SdlPadInput() {
