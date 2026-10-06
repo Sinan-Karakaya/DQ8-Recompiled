@@ -898,9 +898,9 @@ void Overlay::takeScreenshot(bool withMenu) {
         const std::string folder = screenshotFolder();
         std::error_code error;
         std::filesystem::create_directories(folder, error);
-        std::string path = folder + "/DQ8_" + timestamp() + ".png";
+        std::string path = folder + "/DQ8_" + timestamp() + kImageExtension;
         for (int copy = 2; std::filesystem::exists(path, error); ++copy)
-            path = folder + "/DQ8_" + timestamp() + "_" + std::to_string(copy) + ".png";
+            path = folder + "/DQ8_" + timestamp() + "_" + std::to_string(copy) + kImageExtension;
         // Encoding a PNG takes longer than a frame, so it happens off thread.
         auto done = std::make_shared<std::atomic<bool>>(false);
         std::thread saver([this, capture = std::move(capture), path, done]() mutable {
@@ -911,7 +911,7 @@ void Overlay::takeScreenshot(bool withMenu) {
                                                              static_cast<int>(capture.height),
                                                              SDL_PIXELFORMAT_RGBA32, capture.rgba.data(),
                                                              static_cast<int>(capture.width * 4u))) {
-                saved = SDL_SavePNG(surface, path.c_str());
+                saved = saveImage(surface, path.c_str());
                 SDL_DestroySurface(surface);
             }
             {

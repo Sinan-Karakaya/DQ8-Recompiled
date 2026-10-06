@@ -292,8 +292,8 @@ int main(int argc, char **argv) {
         const std::vector<uint8_t> pixels = download(device, target, pixelWidth, pixelHeight);
         SDL_Surface *surface = SDL_CreateSurfaceFrom(pixelWidth, pixelHeight, SDL_PIXELFORMAT_RGBA32,
                                                      const_cast<uint8_t *>(pixels.data()), pixelWidth * 4);
-        const std::string path = (folder / (std::string(name) + ".png")).string();
-        if (!surface || !SDL_SavePNG(surface, path.c_str())) {
+        const std::string path = (folder / (std::string(name) + ui::kImageExtension)).string();
+        if (!surface || !ui::saveImage(surface, path.c_str())) {
             std::fprintf(stderr, "FAIL: could not save %s: %s\n", path.c_str(), SDL_GetError());
             ++failures;
         } else {

@@ -131,7 +131,9 @@ Family familyOf(SDL_GamepadType type) {
     case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_LEFT:
     case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_RIGHT:
     case SDL_GAMEPAD_TYPE_NINTENDO_SWITCH_JOYCON_PAIR: return Family::Nintendo;
+#if SDL_VERSION_ATLEAST(3, 4, 0) // SDL 3.2 has no GameCube type.
     case SDL_GAMEPAD_TYPE_GAMECUBE: return Family::GameCube;
+#endif
     default: return Family::Xbox;
     }
 }

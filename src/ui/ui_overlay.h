@@ -22,6 +22,15 @@ struct ImGuiContext;
 
 namespace dq8::ui {
 
+// Screenshots are PNG. SDL_SavePNG arrived in SDL 3.4; with SDL 3.2 they are BMP.
+#if SDL_VERSION_ATLEAST(3, 4, 0)
+inline constexpr const char *kImageExtension = ".png";
+inline bool saveImage(SDL_Surface *surface, const char *path) { return SDL_SavePNG(surface, path); }
+#else
+inline constexpr const char *kImageExtension = ".bmp";
+inline bool saveImage(SDL_Surface *surface, const char *path) { return SDL_SaveBMP(surface, path); }
+#endif
+
 // What the menu can ask of the game around it. A control whose function is
 // empty is not shown.
 struct HostServices {

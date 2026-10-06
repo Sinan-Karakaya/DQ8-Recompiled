@@ -14,7 +14,8 @@ if(NOT EXISTS "${DQ8_IMGUI_DIR}/imgui.cpp")
         "Run: git submodule update --init thirdparty/imgui")
 endif()
 
-# Imported targets are local to the directory that found them.
+# Imported targets are local to the directory that found them. SDL 3.2 is
+# enough: the sources guard what only SDL 3.4 has.
 if(DQ8_GFX_SDL_TARGET STREQUAL "SDL3::SDL3" AND NOT TARGET SDL3::SDL3)
     find_package(SDL3 3.2 CONFIG REQUIRED)
 elseif(DQ8_GFX_SDL_TARGET STREQUAL "PkgConfig::DQ8_GFX_SDL3" AND NOT TARGET PkgConfig::DQ8_GFX_SDL3)
