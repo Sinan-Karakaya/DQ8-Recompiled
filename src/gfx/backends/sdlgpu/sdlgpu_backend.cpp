@@ -998,9 +998,11 @@ struct SdlGpuBackend::Impl {
                 return nullptr;
             }
             uint32_t offset = 0u;
+            std::vector<uint32_t> wide;
             for (const auto &region : padding.uploads) {
                 auto *pixels = reinterpret_cast<uint32_t *>(mapped + offset);
                 const uint32_t rowPixels = region.width() * scale;
+                wide.resize(rowPixels);
                 for (uint32_t y = region.y0; y < region.y1; ++y) {
                     uint32_t *row = pixels + static_cast<size_t>(y - region.y0) * scale * rowPixels;
                     for (uint32_t x = region.x0; x < region.x1; ++x) {
@@ -1011,10 +1013,12 @@ struct SdlGpuBackend::Impl {
                                     (((b << 3u) | (b >> 2u)) << 16u) | ((color & 0x8000u) << 16u);
                         }
                         for (uint32_t sx = 0u; sx < scale; ++sx)
-                            row[(x - region.x0) * scale + sx] = color;
+                            wide[(x - region.x0) * scale + sx] = color;
                     }
-                    for (uint32_t sy = 1u; sy < scale; ++sy)
-                        std::memcpy(row + static_cast<size_t>(sy) * rowPixels, row, rowPixels * 4u);
+                    // Built aside and only written out: the upload buffer is
+                    // write-combined, and reading a row back out of it is slow.
+                    for (uint32_t sy = 0u; sy < scale; ++sy)
+                        std::memcpy(row + static_cast<size_t>(sy) * rowPixels, wide.data(), rowPixels * 4u);
                 }
                 offset += (region.width() * region.height() * scale * scale * 4u + 255u) & ~255u;
             }

@@ -1134,7 +1134,7 @@ bool GsTargetCache::applyCpuPatches(GsSurface &surface, std::string &error) {
     auto *mapped = static_cast<uint8_t *>(SDL_MapGPUTransferBuffer(device, m_upload, true));
     if (!mapped) return fail("SDL_MapGPUTransferBuffer");
     uint32_t offset = 0u;
-    std::vector<uint32_t> row;
+    std::vector<uint32_t> row, wide;
     for (const auto &region : surface.cpuPatches) {
         const uint32_t width = region.width();
         for (uint32_t y = region.y0; y < region.y1; ++y) {
@@ -1147,12 +1147,14 @@ bool GsTargetCache::applyCpuPatches(GsSurface &surface, std::string &error) {
             row.resize(width);
             GSMem::ReadRowCT32(m_vram.data(), surface.base, surface.bufferWidth,
                                region.x0, y, width, reinterpret_cast<uint8_t *>(row.data()));
-            auto *wide = reinterpret_cast<uint32_t *>(out);
+            // Expanded aside and only written out: upload buffers are
+            // write-combined, so copying a row back out of one is very slow.
+            wide.resize(size_t(width) * scale);
             for (uint32_t x = 0u; x < width; ++x)
                 for (uint32_t sx = 0u; sx < scale; ++sx)
-                    wide[x * scale + sx] = row[x];
-            for (uint32_t sy = 1u; sy < scale; ++sy)
-                std::memcpy(out + size_t(sy) * width * scale * 4u, out, size_t(width) * scale * 4u);
+                    wide[size_t(x) * scale + sx] = row[x];
+            for (uint32_t sy = 0u; sy < scale; ++sy)
+                std::memcpy(out + size_t(sy) * width * scale * 4u, wide.data(), size_t(width) * scale * 4u);
         }
         offset += patchBytes(region);
     }
