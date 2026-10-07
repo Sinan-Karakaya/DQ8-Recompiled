@@ -144,7 +144,8 @@ std::vector<std::string> withCompilerEnvironment(const std::vector<std::string> 
     if (install.empty())
         return args;
     const std::filesystem::path script = workspace / "launcher-step.bat";
-    std::ofstream bat(script, std::ios::trunc);
+    // Binary: the lines carry their own \r\n, which text mode would double.
+    std::ofstream bat(script, std::ios::binary | std::ios::trunc);
     bat << "@echo off\r\ncall \"" << install << "\\VC\\Auxiliary\\Build\\vcvars64.bat\" >nul || exit /b 1\r\n";
     for (const std::string &arg : args)
         bat << '"' << arg << "\" ";
@@ -184,8 +185,12 @@ std::filesystem::path builtMarker(const std::filesystem::path &repo) {
 } // namespace
 
 bool launcherBuilt(const std::filesystem::path &repo, const std::filesystem::path &workspace) {
+    std::string marker = readText(builtMarker(repo));
+    // A marker written in text mode on Windows ends in \r\n.
+    while (!marker.empty() && (marker.back() == '\n' || marker.back() == '\r'))
+        marker.pop_back();
     std::error_code ec;
-    return readText(builtMarker(repo)) == pathUtf8(workspace) + "\n" &&
+    return marker == pathUtf8(workspace) &&
            std::filesystem::is_regular_file(gamePath(repo), ec) &&
            std::filesystem::is_regular_file(extractedDisc(workspace) / kVersion, ec);
 }
@@ -620,7 +625,8 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
                 args.push_back(arg);
             if (!command(Stage::TranslateGame, args))
                 return false;
-            std::ofstream(stampPath, std::ios::trunc) << inputs;
+            // Binary, as readText reads it: Windows text mode would write \r\n.
+            std::ofstream(stampPath, std::ios::binary | std::ios::trunc) << inputs;
             size_t files = 0u;
             for (const auto &entry : std::filesystem::directory_iterator(generated / kVersion, dirError))
                 files += entry.path().extension() == ".cpp" ? 1u : 0u;
@@ -670,7 +676,7 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
             if (!command(Stage::CompileGame, {"ninja", "-C", dir, "-j", jobs, "dq8"},
                          plan.total > 0.0 ? &plan : nullptr))
                 return false;
-            std::ofstream(builtMarker(repo), std::ios::trunc) << pathUtf8(options.workspace) << "\n";
+            std::ofstream(builtMarker(repo), std::ios::binary | std::ios::trunc) << pathUtf8(options.workspace) << "\n";
             return true;
         });
     m_succeeded = ok;
