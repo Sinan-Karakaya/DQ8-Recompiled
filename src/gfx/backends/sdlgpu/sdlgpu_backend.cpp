@@ -450,6 +450,19 @@ struct SdlGpuBackend::Impl {
     std::unique_ptr<GsTransferEngine> transfer;
     GSTransferCommand transferCommand{};
     bool patchingHostWrite = false;
+    // A host write that skipped resolving the pages it covers is still arriving.
+    bool coveredTransferOpen = false;
+
+    // Counts the open covered host write if something meets it before its last
+    // pixel, once; called before a draw or another transfer.
+    void noteTransferInterrupted() {
+        if (!coveredTransferOpen)
+            return;
+        coveredTransferOpen = false;
+        const GSTransferSnapshot state = transfer ? transfer->snapshot() : GSTransferSnapshot{};
+        if (state.direction == 0u && state.copiedPixels < state.totalPixels)
+            ++stats.interruptedCoveredTransfers;
+    }
     std::unique_ptr<GsTargetCache> targets;
     std::unique_ptr<GsTextureCache> textures;
 
@@ -1076,6 +1089,7 @@ struct SdlGpuBackend::Impl {
 
     void submit(const GSPrimitiveBatch &batch) {
         ++stats.primitivesSubmitted;
+        noteTransferInterrupted();
         if (!device.valid() || !vram.attached() || batch.vertexCount == 0u)
             return;
 
@@ -1424,10 +1438,13 @@ struct SdlGpuBackend::Impl {
             alphaDraw.pipeline.blendEnabled = 0u;
             alphaDraw.pipeline.colorWriteMask = SDL_GPU_COLORCOMPONENT_A;
             alphaDraw.pipeline.depthWrite = 0u;
-            if (alphaDraw.pipeline.depthCompare == SDL_GPU_COMPAREOP_GREATER)
+            if (alphaDraw.pipeline.depthCompare == SDL_GPU_COMPAREOP_GREATER) {
                 alphaDraw.pipeline.depthCompare = SDL_GPU_COMPAREOP_GREATER_OR_EQUAL;
-            else if (alphaDraw.pipeline.depthCompare == SDL_GPU_COMPAREOP_LESS)
+                ++stats.widenedAlphaReplays;
+            } else if (alphaDraw.pipeline.depthCompare == SDL_GPU_COMPAREOP_LESS) {
                 alphaDraw.pipeline.depthCompare = SDL_GPU_COMPAREOP_LESS_OR_EQUAL;
+                ++stats.widenedAlphaReplays;
+            }
             alphaDraw.usesBlendConstant = false;
             alphaDraw.blendConstant = 0.0f;
             alphaDraw.fragmentUniforms.misc[0] = 1.0f;
@@ -1992,7 +2009,8 @@ struct SdlGpuBackend::Impl {
                      "demux=%llu (%.0f%%) refused=%llu es-buffer-peak=%lluKiB | threads: demux=%u get-picture=%u"
                      " | ee-dispatches=%llu (%llu/frame) throws=%llu\n"
                      "  sched: loop=%llu (%.0f/s) resumes=%llu pumps=%llu enter-guest=%llu suspends=%llu"
-                     " | presents native=%llu composed=%llu gpu-composed=%llu dual-circuit=%llu\n",
+                     " | presents native=%llu composed=%llu gpu-composed=%llu dual-circuit=%llu"
+                     " | widened-alpha-replays=%llu interrupted-covered-transfers=%llu\n",
                      seconds > 0.0 ? static_cast<double>(interval) / seconds : 0.0,
                      seconds > 0.0 ? (backendSeconds / seconds) * 100.0 : 0.0,
                      interval,
@@ -2041,7 +2059,9 @@ struct SdlGpuBackend::Impl {
                      static_cast<unsigned long long>(stats.nativePresents),
                      static_cast<unsigned long long>(stats.composedPresents),
                      static_cast<unsigned long long>(stats.gpuComposedPresents),
-                     static_cast<unsigned long long>(stats.secondaryDisplayCircuits));
+                     static_cast<unsigned long long>(stats.secondaryDisplayCircuits),
+                     static_cast<unsigned long long>(stats.widenedAlphaReplays),
+                     static_cast<unsigned long long>(stats.interruptedCoveredTransfers));
 
         previous = stats;
         previous.textureInvalidationsFromDraw = textureStats().invalidationsFromDraw;
@@ -2999,6 +3019,7 @@ void SdlGpuBackend::BeginTransfer(const GSTransferCommand &command) {
         return;
     Impl::ScopedTimer timer(m_impl->backendNanos);
     ++m_impl->stats.transfersBegun;
+    m_impl->noteTransferInterrupted();
     if (command.direction == 2u) {
         if (!m_impl->flushDraws()) return;
         if (m_impl->gpuLocalCopy(command)) {
@@ -3024,6 +3045,7 @@ void SdlGpuBackend::BeginTransfer(const GSTransferCommand &command) {
                                command.bitbltbuf.dpsm, command.trxreg.rrw, command.trxreg.rrh,
                                command.trxpos.dsax, command.trxpos.dsay);
             if (!m_impl->settleFor(pages, true, covered)) return;
+            m_impl->coveredTransferOpen = command.direction == 0u && covered.any();
         }
     }
     m_impl->transferCommand = command;
@@ -3053,9 +3075,16 @@ void SdlGpuBackend::UploadImage(const uint8_t *data, uint32_t sizeBytes) {
                            std::max<uint32_t>(command.bitbltbuf.dbw, 1u), GS_PSM_CT32,
                            command.trxreg.rrw, command.trxreg.rrh,
                            command.trxpos.dsax, command.trxpos.dsay);
-        if (!m_impl->patchingHostWrite && !m_impl->settleFor(pages, true, covered)) return;
+        if (!m_impl->patchingHostWrite) {
+            if (!m_impl->settleFor(pages, true, covered)) return;
+            m_impl->coveredTransferOpen = m_impl->coveredTransferOpen || covered.any();
+        }
     }
     m_impl->transfer->upload(data, sizeBytes);
+    if (m_impl->coveredTransferOpen) {
+        const auto state = m_impl->transfer->snapshot();
+        m_impl->coveredTransferOpen = state.direction == 0u && state.copiedPixels < state.totalPixels;
+    }
     if (m_impl->patchingHostWrite) {
         const auto after = m_impl->transfer->snapshot();
         if (after.copiedPixels > before.copiedPixels)

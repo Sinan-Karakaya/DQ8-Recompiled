@@ -226,7 +226,8 @@ int main(int argc, char **argv) try {
             static_cast<unsigned long long>(s.gpuComposedPresents));
         std::printf("approximations: blends=%llu saturated=%llu destination-alpha-factor=%llu "
                     "bit-masks=%llu destination-alpha-test=%llu alpha-fail=%llu "
-                    "color-wrap=%llu untranslated-textures=%llu\n",
+                    "color-wrap=%llu untranslated-textures=%llu widened-alpha-replays=%llu "
+                    "interrupted-covered-transfers=%llu\n",
             static_cast<unsigned long long>(s.inexactBlends),
             static_cast<unsigned long long>(s.saturatedBlendFactors),
             static_cast<unsigned long long>(s.destinationAlphaFactors),
@@ -234,7 +235,9 @@ int main(int argc, char **argv) try {
             static_cast<unsigned long long>(s.destinationAlphaTests),
             static_cast<unsigned long long>(s.alphaFailModes),
             static_cast<unsigned long long>(s.disabledColorClamps),
-            static_cast<unsigned long long>(s.untranslatedTextures));
+            static_cast<unsigned long long>(s.untranslatedTextures),
+            static_cast<unsigned long long>(s.widenedAlphaReplays),
+            static_cast<unsigned long long>(s.interruptedCoveredTransfers));
     }
 } catch (const std::exception &e) {
     std::fprintf(stderr, "%s\n", e.what()); return 1;

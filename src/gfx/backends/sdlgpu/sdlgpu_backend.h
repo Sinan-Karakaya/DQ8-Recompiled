@@ -56,6 +56,13 @@ struct SdlGpuStats {
     uint64_t texturedPrimitives = 0u;
     uint64_t untranslatedTextures = 0u;
     uint64_t secondaryDisplayCircuits = 0u;
+    // Alpha-only replays of a strict depth test, widened to pass at equal depth:
+    // an equal-depth fragment that failed the colour pass can still write alpha.
+    uint64_t widenedAlphaReplays = 0u;
+    // Host writes that skipped resolving the pages their rectangle covers, then
+    // met a draw or another transfer before their last pixel: the part not yet
+    // written comes from local memory, which can be older than the GPU's copy.
+    uint64_t interruptedCoveredTransfers = 0u;
 
     uint64_t colorResolves = 0u;
     uint64_t colorRefreshes = 0u;
