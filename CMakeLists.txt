@@ -142,10 +142,8 @@ if(DQ8_BUILD_PS2RECOMP)
         target_compile_definitions(ps2_runtime PRIVATE RUNTIME_DECI2CALL)
     endif()
 
-    # Optional: tune the runtime (VU programs, VIF, GS frontend) for the build
-    # machine, e.g. -DDQ8_RUNTIME_ARCH=native. The binary then only runs on
-    # CPUs with the same features. FP contraction stays off: an FMA rounds
-    # once where the PS2 rounds twice, which would change VU results.
+    # Optional -march for the runtime. FP contraction stays off: an FMA rounds
+    # once where the PS2 rounds twice.
     set(DQ8_RUNTIME_ARCH "" CACHE STRING
         "Target CPU for ps2_runtime (-march value, e.g. native or x86-64-v3); empty keeps the default")
     if(DQ8_RUNTIME_ARCH AND TARGET ps2_runtime)
