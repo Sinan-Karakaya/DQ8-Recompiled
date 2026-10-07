@@ -528,17 +528,30 @@ void LauncherApp::showPreview(Preview preview) {
         tools.tools.push_back(check);
     };
     const bool missing = preview == Preview::ToolsMissing;
-    add("CMake", "Configures the build", missing ? nullptr : "3.31.6");
-    add("Ninja", "Runs the build", missing ? nullptr : "1.12.1");
-    add("Python", "Translates the game code", "3.13.1");
-    add("C++ compiler", "Compiles the game", "17.0.0");
-    add("pkg-config", "Finds SDL3 and FFmpeg", "2.5.1");
-    add("SDL3", "Window, graphics, sound and controllers", missing ? nullptr : "3.4.16");
-    add("FFmpeg", "Plays the movies; without it they are skipped", "62.11.100", true);
-    add("LLVM", "Archives the large compiled game", "21.1.0");
-    if (missing) {
-        tools.installCommand = "xcode-select --install; brew install cmake ninja pkgconf sdl3 ffmpeg llvm python";
-        tools.instructions = "Paste this into Terminal, wait for it to finish, then check again.";
+    if (m_payload) {
+        // A release: everything but the compiler is included.
+        add("C++ compiler", "Compiles the game", missing ? nullptr : "21.0.0");
+        for (const auto &[name, version] : m_payload->versions)
+            tools.tools.push_back(includedTool(name, version));
+        if (missing) {
+            tools.installCommand = "xcode-select --install";
+            tools.instructions = "The compiler comes with Apple's Command Line Tools.";
+            tools.install = commandLineToolsInstall();
+        }
+    } else {
+        add("C++ compiler", "Compiles the game", "17.0.0");
+        add("CMake", "Configures the build", missing ? nullptr : "3.31.6");
+        add("Ninja", "Runs the build", missing ? nullptr : "1.12.1");
+        add("Python", "Translates the game code", "3.13.1");
+        add("pkg-config", "Finds SDL3 and FFmpeg", "2.5.1");
+        add("SDL3", "Window, graphics, sound and controllers", missing ? nullptr : "3.4.16");
+        add("FFmpeg", "Plays the movies; without it they are skipped", "62.11.100", true);
+        add("LLVM", "Archives the compiled game faster", "21.1.0", true);
+        if (missing) {
+            tools.installCommand = "brew install cmake ninja pkgconf sdl3 ffmpeg llvm python";
+            tools.instructions = "Homebrew can install the rest.";
+            tools.install = InstallAction{"Install with Homebrew", "Homebrew installs them; it takes a while.", {}};
+        }
     }
     {
         std::lock_guard lock(m_toolsMutex);

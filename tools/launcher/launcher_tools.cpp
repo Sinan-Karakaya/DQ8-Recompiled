@@ -181,6 +181,20 @@ const char *includedPurpose(const std::string &name) {
 }
 } // namespace
 
+ToolCheck includedTool(const std::string &name, const std::string &version) {
+    ToolCheck tool{name, includedPurpose(name)};
+    tool.found = true;
+    tool.included = true;
+    tool.version = version;
+    return tool;
+}
+
+InstallAction commandLineToolsInstall() {
+    return InstallAction{"Install the Command Line Tools",
+                         "Apple's installer opens; accept it, and it downloads them in a few minutes.",
+                         {"xcode-select", "--install"}, true};
+}
+
 ToolReport checkTools(const ChildEnvironment &environment, const Payload *payload) {
     ToolReport report;
     report.tools.push_back(checkCompiler(environment));
@@ -188,13 +202,8 @@ ToolReport checkTools(const ChildEnvironment &environment, const Payload *payloa
     report.tools.push_back(checkWindowHeaders());
 #endif
     if (payload) {
-        for (const auto &[name, version] : payload->versions) {
-            ToolCheck tool{name, includedPurpose(name)};
-            tool.found = true;
-            tool.included = true;
-            tool.version = version;
-            report.tools.push_back(tool);
-        }
+        for (const auto &[name, version] : payload->versions)
+            report.tools.push_back(includedTool(name, version));
     } else {
         report.tools.push_back(probe("CMake", "Configures the build", {"cmake", "--version"}, environment, {3, 24}));
         report.tools.push_back(probe("Ninja", "Runs the build", {"ninja", "--version"}, environment));
@@ -233,9 +242,7 @@ ToolReport checkTools(const ChildEnvironment &environment, const Payload *payloa
     if (compilerMissing) {
         report.installCommand = "xcode-select --install";
         report.instructions = "The compiler comes with Apple's Command Line Tools.";
-        report.install = InstallAction{"Install the Command Line Tools",
-                                       "Apple's installer opens; accept it, and it downloads them in a few minutes.",
-                                       {"xcode-select", "--install"}, true};
+        report.install = commandLineToolsInstall();
     } else if (probeOutput({"brew", "--version"}, environment).empty()) {
         report.instructions = "Install Homebrew from brew.sh, then come back and check again.";
     } else {

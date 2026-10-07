@@ -45,6 +45,11 @@ struct ToolReport {
 // installers, and user-local installs put tools.
 std::vector<std::string> extraToolDirs();
 
+// A tool the payload carries, as the Tools page lists it.
+ToolCheck includedTool(const std::string &name, const std::string &version);
+// macOS: Apple's installer for the Command Line Tools, which bring the compiler.
+InstallAction commandLineToolsInstall();
+
 // Runs the version probes; takes a second or two. With a payload, only what
 // it cannot carry is looked for: the compiler, and on Linux the window headers.
 ToolReport checkTools(const ChildEnvironment &environment, const Payload *payload = nullptr);
