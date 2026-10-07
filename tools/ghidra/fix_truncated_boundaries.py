@@ -45,6 +45,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import bisect
 import csv
 import struct
 import sys
@@ -127,20 +128,72 @@ def has_delay_slot(raw: int) -> bool:
 MAX_TAIL_BYTES = 0x1000
 
 
+def jump_target(addr: int, raw: int) -> int | None:
+    """Return the target of a `j`, or None. A `jal` is a call and comes back."""
+    if raw >> 26 != 0x02:
+        return None
+    return ((addr + 4) & 0xF0000000) | ((raw & 0x03FFFFFF) << 2)
+
+
+# BLTZAL BGEZAL BLTZALL BGEZALL: calls like `jal`, so they say nothing about whose code a block is.
+REGIMM_LINK_RT = {0x10, 0x11, 0x12, 0x13}
+
+
+def local_branch_target(addr: int, raw: int) -> int | None:
+    """Return the target of a PC-relative branch that is not a call, or None."""
+    if raw >> 26 == REGIMM_OPCODE and ((raw >> 16) & 0x1F) in REGIMM_LINK_RT:
+        return None
+    return branch_target(addr, raw)
+
+
+def ends_flow(raw: int) -> bool:
+    """True for `j`, `jr` and `b`, after which execution never reaches the next pair."""
+    opcode = raw >> 26
+    if opcode == 0x02 or (opcode == 0x00 and (raw & 0x3F) == 0x08):
+        return True
+    return opcode in (0x04, 0x14) and (raw >> 21) & 0x1F == (raw >> 16) & 0x1F
+
+
+def enters(blob: bytes, segments: list[Segment], code: list[tuple[int, int]],
+           hole: tuple[int, int]) -> bool:
+    """True if `code` branches, jumps or falls through into `hole`."""
+    for start, end in code:
+        for addr in range(start, end, 4):
+            raw = word_at(blob, segments, addr)
+            if raw is None:
+                break
+            target = local_branch_target(addr, raw)
+            if target is None:
+                target = jump_target(addr, raw)
+            if target is not None and hole[0] <= target < hole[1]:
+                return True
+        if end == hole[0]:
+            last = (word_at(blob, segments, end - 8), word_at(blob, segments, end - 4))
+            if not any(raw is not None and ends_flow(raw) for raw in last):
+                return True
+    return False
+
+
 def repair_outlined_tails(rows: list[dict], blob: bytes, segments: list[Segment]):
-    """Attach unmapped out-of-line tails to the function they branch back into.
+    """Attach unmapped out-of-line tails to the function they belong to.
 
     CodeWarrior parks a function's cold blocks after *other* functions, so the
     tail is neither inside its owner nor adjacent to it and `analyse` cannot
-    reach it without crossing the function in between. The tail identifies its
-    owner unambiguously: a PC-relative branch cannot cross a function boundary
-    in compiler output, so a branch from the hole into F means the hole is F's.
+    reach it without crossing the function in between. A hole is F's tail when
+    F's own code (its body, or a tail already attached) branches, jumps or falls
+    into it and the hole branches back into that code: a PC-relative branch
+    cannot cross a function boundary in compiler output. The way in matters as
+    much as the way back, because data decodes as branches too -- a table of
+    DMA channel addresses reads as `b` to anywhere in the previous 128 KiB.
 
     Extension therefore overlaps whatever sits in between. That is harmless --
     `ps2_recomp` decodes each function independently and the duplicated body is
     unreachable inside the extended one -- and it is the only way to make the
     tail's branches back into F resolve as internal labels instead of dispatches
     to an address no function is registered at.
+
+    Returns the repairs, and the (row, hole) pairs where the hole branches into
+    the row but nothing in the row leads there.
     """
     covered = sorted((row["_start"], row["_end"]) for row in rows if row["_end"] > row["_start"])
     holes = []
@@ -150,29 +203,64 @@ def repair_outlined_tails(rows: list[dict], blob: bytes, segments: list[Segment]
             holes.append((cursor, start))
         cursor = max(cursor, end)
 
-    repairs = []
+    exits = []  # (hole, targets of the branches that leave it)
     for hole_start, hole_end in holes:
         if hole_end - hole_start > MAX_TAIL_BYTES:
             continue
-        owners = set()
+        targets = []
         for addr in range(hole_start, hole_end, 4):
             raw = word_at(blob, segments, addr)
             if raw is None:
-                owners.clear()
+                targets = []
                 break
-            target = branch_target(addr, raw)
-            if target is None or hole_start <= target < hole_end:
-                continue
-            for index, row in enumerate(rows):
-                if row["_start"] < target < row["_end"] and row["_end"] <= hole_start:
-                    owners.add(index)
-        for index in owners:
-            row = rows[index]
-            repairs.append((row, row["_end"], hole_end))
-            row["_end"] = hole_end
-            row["End"] = f"0x{hole_end:08X}"
-            row["Size"] = str(hole_end - row["_start"])
-    return repairs
+            target = local_branch_target(addr, raw)
+            if target is not None and not hole_start <= target < hole_end:
+                targets.append(target)
+        if targets:
+            exits.append(((hole_start, hole_end), targets))
+
+    all_targets = sorted({target for _, targets in exits for target in targets})
+    bodies = {}  # branch target -> rows whose body holds it
+    for index, row in enumerate(rows):
+        lo = bisect.bisect_right(all_targets, row["_start"])
+        hi = bisect.bisect_left(all_targets, row["_end"])
+        for target in all_targets[lo:hi]:
+            bodies.setdefault(target, []).append(index)
+
+    # A tail can lead on to another, so repeat until nothing more attaches.
+    tails: dict[int, list[tuple[int, int]]] = {}
+    unreached = set()
+    progress = True
+    while progress:
+        progress = False
+        for hole, targets in exits:
+            owners = set()
+            for target in targets:
+                owners.update(i for i in bodies.get(target, ()) if rows[i]["_end"] <= hole[0])
+                owners.update(i for i, held in tails.items()
+                              if any(start <= target < end for start, end in held))
+            for index in sorted(owners):
+                held = tails.setdefault(index, [])
+                if hole in held:
+                    continue
+                if enters(blob, segments, [(rows[index]["_start"], rows[index]["_end"])] + held, hole):
+                    held.append(hole)
+                    unreached.discard((index, hole))
+                    progress = True
+                else:
+                    unreached.add((index, hole))
+
+    repairs = []
+    for index, held in sorted(tails.items()):
+        if not held:
+            continue
+        row = rows[index]
+        end = max(hole_end for _, hole_end in held)
+        repairs.append((row, row["_end"], end))
+        row["_end"] = end
+        row["End"] = f"0x{end:08X}"
+        row["Size"] = str(end - row["_start"])
+    return repairs, [(rows[index], hole) for index, hole in sorted(unreached)]
 
 
 def read_map(path: Path) -> tuple[list[dict], list[str]]:
@@ -307,12 +395,17 @@ def main(argv: list[str] | None = None) -> int:
         print(f"{row['Name']:40} 0x{row['_start']:08x}  "
               f"degenerate end 0x{old_end:08x} -> 0x{new_end:08x}")
 
-    tails = repair_outlined_tails(rows, blob, segments)
+    tails, unreached = repair_outlined_tails(rows, blob, segments)
     for row, old_end, new_end in (tails if args.limit == 0 else tails[: args.limit]):
         print(f"{row['Name']:40} 0x{row['_start']:08x}  "
               f"outlined tail 0x{old_end:08x} -> 0x{new_end:08x}")
     if args.limit and len(tails) > args.limit:
         print(f"... and {len(tails) - args.limit} more outlined-tail repairs")
+    for row, (start, end) in (unreached if args.limit == 0 else unreached[: args.limit]):
+        print(f"UNREACHED {row['Name']} 0x{row['_start']:08x}: 0x{start:08x}-0x{end:08x} "
+              f"branches into it, but nothing in it leads there", file=sys.stderr)
+    if args.limit and len(unreached) > args.limit:
+        print(f"... and {len(unreached) - args.limit} more unreached", file=sys.stderr)
 
     repairs, blocked = analyse(rows, blob, segments)
 
@@ -348,7 +441,7 @@ def main(argv: list[str] | None = None) -> int:
 
     print(f"\n{len(repairs)} function(s) extended, {len(degenerate)} degenerate "
           f"end(s) rebuilt, {len(tails)} outlined tail(s) attached, "
-          f"{len(slots)} delay slot(s) recovered, "
+          f"{len(unreached)} left unreached, {len(slots)} delay slot(s) recovered, "
           f"{len(blocked) + len(slot_blocked)} blocked, {len(rows)} total")
 
     if args.in_place and (repairs or degenerate or slots or tails):
