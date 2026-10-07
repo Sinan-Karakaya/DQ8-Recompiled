@@ -48,11 +48,19 @@ project(DQ8Recomp
     DESCRIPTION "Dragon Quest 8 static recompilation"
     LANGUAGES C CXX)
 
-# Apple's ar does not accept Ninja's @response files for the 12k-file corpus.
+# Apple's ar does not accept Ninja's @response files, which the 12k-file corpus
+# needs as one archive. Without llvm-ar it is split into archives small enough
+# to need none (src/runtime/CMakeLists.txt).
+set(DQ8_SPLIT_GENERATED_ARCHIVE OFF)
 if(APPLE AND DQ8_LINK_GENERATED)
     find_program(DQ8_LLVM_AR NAMES llvm-ar
-        HINTS /opt/homebrew/opt/llvm/bin /usr/local/opt/llvm/bin REQUIRED)
-    set(CMAKE_AR "${DQ8_LLVM_AR}")
+        HINTS /opt/homebrew/opt/llvm/bin /usr/local/opt/llvm/bin)
+    if(DQ8_LLVM_AR)
+        set(CMAKE_AR "${DQ8_LLVM_AR}")
+    else()
+        set(DQ8_SPLIT_GENERATED_ARCHIVE ON)
+        message(STATUS "DQ8Recomp: no llvm-ar; the generated corpus is archived in parts")
+    endif()
 endif()
 
 message(STATUS "DQ8Recomp version: ${DQ8_VERSION}")
