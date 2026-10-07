@@ -12,7 +12,7 @@ namespace dq8::ui {
 
 enum class Icon : uint8_t {
     Display, Sound, SoundOff, Controls, Interface, Crown, Camera, Pause, Play,
-    Keyboard, Info, Chart, Close, Folder, Link, Speed, Check, Warning, Reset
+    Keyboard, Info, Chart, Close, Folder, Link, Speed, Check, Warning, Reset, Disc, Wrench, Gear, Copy
 };
 
 void drawIcon(ImDrawList *list, Icon icon, ImVec2 center, float size, ImU32 color);
