@@ -40,6 +40,7 @@ void settingsRoundTrip() {
     settings.display.filter = gfx::SdlGpuFilter::Nearest;
     settings.display.integerScale = true;
     settings.display.presentMode = SDL_GPU_PRESENTMODE_MAILBOX;
+    settings.display.removeLineBlend = false; // the game's default is on
     settings.resolutionScale = 3u;
     settings.volume = 42;
     settings.muted = true;

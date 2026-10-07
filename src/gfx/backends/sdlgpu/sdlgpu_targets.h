@@ -135,7 +135,10 @@ public:
 
     // Makes local memory current for every surface overlapping `pages`.
     bool resolve(const GsPageSet &pages, std::string &error);
-    bool resolveForHostWrite(const GsPageSet &pages, std::string &error);
+    // Before a host write to `pages`: brings back what the GPU owns there
+    // and the write will not replace. `covered` are pages it writes whole.
+    bool resolveForHostWrite(const GsPageSet &pages, std::string &error,
+                             const GsPageSet &covered = {});
     bool resolveAll(std::string &error);
 
     // Records that local memory changed under `pages`.
@@ -146,7 +149,9 @@ public:
     // The one surface holding GPU-drawn content in these pages, when it is
     // native CT32 and covers all of them; null otherwise. After refresh() its
     // texture is the current content of every one of those pages.
-    GsSurface *nativeOwner(const GsPageSet &pages);
+    // `allowScaled`: also an upscaled owner, for readers that sample it at
+    // each GS pixel's sample point.
+    GsSurface *nativeOwner(const GsPageSet &pages, bool allowScaled = false);
     void patchHostWrite(const GsPageSet &pages, uint32_t base, uint32_t bw,
                         uint32_t x, uint32_t y, uint32_t width,
                         uint32_t firstPixel, uint32_t endPixel);

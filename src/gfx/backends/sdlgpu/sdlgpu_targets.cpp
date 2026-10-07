@@ -304,7 +304,7 @@ GsSurface *GsTargetCache::findSampleSource(uint32_t base, uint32_t psm,
         }
         if (!surface.needsUpload.empty()) {
             if (!surface.gpuDirty.empty() &&
-                !(surface.psm == GS_PSM_CT32 && surface.scale == 1u &&
+                !(surface.psm == GS_PSM_CT32 &&
                   (surface.base & 31u) == 0u && surface.width == surface.bufferWidth * 64u &&
                   surface.height % 32u == 0u))
                 continue;
@@ -417,17 +417,18 @@ void GsTargetCache::invalidate(const GsPageSet &pages, bool preserveOwned) {
 }
 
 namespace {
-// Whole CT32 pages at scale 1: each GS page is one 64x32 cell of the surface,
-// so host writes can be patched in and uploads done page by page.
-bool nativeCt32(const GsSurface &surface) {
-    return surface.psm == GS_PSM_CT32 && surface.scale == 1u && (surface.base & 31u) == 0u &&
+// Whole CT32 pages: each GS page is one 64x32 cell of the surface (a block
+// scale times that when upscaled), so host writes can be patched in and
+// uploads done page by page. `anyScale` accepts an upscaled one too.
+bool nativeCt32(const GsSurface &surface, bool anyScale = false) {
+    return surface.psm == GS_PSM_CT32 && (anyScale || surface.scale == 1u) && (surface.base & 31u) == 0u &&
            surface.width == surface.bufferWidth * 64u &&
            surface.pages.count() == surface.bufferWidth * ((surface.height + 31u) / 32u) &&
            !surface.undefined;
 }
 }
 
-GsSurface *GsTargetCache::nativeOwner(const GsPageSet &pages) {
+GsSurface *GsTargetCache::nativeOwner(const GsPageSet &pages, bool allowScaled) {
     GsSurface *owner = nullptr;
     for (auto &candidate : m_surfaces) {
         GsSurface &surface = *candidate;
@@ -437,7 +438,7 @@ GsSurface *GsTargetCache::nativeOwner(const GsPageSet &pages) {
             return nullptr;
         owner = &surface;
     }
-    if (!owner || !nativeCt32(*owner) || (pages & ~owner->pages).any())
+    if (!owner || !nativeCt32(*owner, allowScaled) || (pages & ~owner->pages).any())
         return nullptr;
     return owner;
 }
@@ -449,7 +450,9 @@ bool GsTargetCache::canPatchHostWrite(const GsPageSet &pages) const {
         if (surface.depth || surface.gpuDirty.empty() || (surface.pages & pages).none())
             continue;
         owned = true;
-        if (!nativeCt32(surface) || !surface.needsUpload.empty())
+        // Pending uploads are fine: a patch only lands in pages the GPU owns,
+        // and a whole-page surface refreshes only the pages it does not.
+        if (!nativeCt32(surface, true) || surface.height % 32u != 0u)
             return false;
     }
     return owned;
@@ -560,12 +563,40 @@ bool GsTargetCache::resolveAll(std::string &error) {
     return resolveSurfaces(surfaces, error);
 }
 
-bool GsTargetCache::resolveForHostWrite(const GsPageSet &pages, std::string &error) {
+bool GsTargetCache::resolveForHostWrite(const GsPageSet &pages, std::string &error,
+                                        const GsPageSet &covered) {
     std::vector<GsSurface *> surfaces;
     for (auto &candidate : m_surfaces) {
         auto &surface = *candidate;
         if (surface.depth || surface.gpuDirty.empty() || (surface.pages & pages).none())
             continue;
+        // Whole CT32 pages refresh page by page, never over a page the GPU
+        // still owns, so only the owned pages the write lands in part of
+        // need their contents in local memory: it replaces the rest of
+        // what it touches. At a scale above 1 a resolve is a full stall and
+        // a downsample, and DQ8 reuses target memory for texture uploads.
+        if (nativeCt32(surface, true) && surface.height % 32u == 0u) {
+            const GsPageSet partial = pages & ~covered & surface.ownedPages;
+            if (partial.none())
+                continue;
+            GsRegion region = regionForPages(surface, partial);
+            region.x0 = std::max(region.x0, surface.gpuDirty.x0);
+            region.y0 = std::max(region.y0, surface.gpuDirty.y0);
+            region.x1 = std::min(region.x1, surface.gpuDirty.x1);
+            region.y1 = std::min(region.y1, surface.gpuDirty.y1);
+            if (!region.empty() && !resolveRegion(surface, region, error))
+                return false;
+            // Local memory now holds them, and the write is about to change
+            // them there: hand them over, so the next write to the same pages
+            // does not stall on another readback.
+            surface.ownedPages &= ~partial;
+            surface.needsUpload.merge(regionForPages(surface, partial));
+            if (surface.ownedPages.none()) {
+                surface.gpuDirty.clear();
+                surface.ownedPages.reset();
+            }
+            continue;
+        }
         // Include earlier CPU writes: two disjoint invalidations can merge
         // across a GPU-owned middle even when neither alone touches it.
         GsRegion upload = surface.needsUpload;
@@ -742,7 +773,7 @@ bool GsTargetCache::refresh(GsSurface &surface, std::string &error) {
         return true;
     }
 
-    if (surface.psm == GS_PSM_CT32 && surface.scale == 1u &&
+    if (surface.psm == GS_PSM_CT32 &&
         (surface.base & 31u) == 0u && surface.width == surface.bufferWidth * 64u &&
         surface.ownedPages.any()) {
         for (uint32_t row = 0u; row < (surface.height + 31u) / 32u; ++row) {
@@ -810,7 +841,7 @@ bool GsTargetCache::prepareColorView(GsSurface &surface, std::string &error) {
         const bool to32 = source.psm == GS_PSM_CT16 && surface.psm == GS_PSM_CT32;
         const uint32_t height32 = to16 ? source.height : surface.height;
         const uint32_t height16 = to16 ? surface.height : source.height;
-        if ((to16 || to32) && source.scale == 1u && surface.scale == 1u &&
+        if ((to16 || to32) && source.scale == surface.scale &&
             source.base == surface.base && (source.base & 31u) == 0u &&
             source.bufferWidth == surface.bufferWidth && source.width == surface.width &&
             source.width == source.bufferWidth * 64u && height32 % 32u == 0u &&
@@ -823,7 +854,7 @@ bool GsTargetCache::prepareColorView(GsSurface &surface, std::string &error) {
             // view over the new format's draws. Mixed owners retain readback.
             if (!applyCpuPatches(source, error) ||
                 !m_device.reinterpretColor(source.texture, surface.texture,
-                                           surface.width, surface.height, to16, error))
+                                           surface.width, surface.height, to16, surface.scale, error))
                 return false;
             source.gpuDirty.clear();
             source.ownedPages.reset();
@@ -833,8 +864,11 @@ bool GsTargetCache::prepareColorView(GsSurface &surface, std::string &error) {
             return true;
         }
     }
-    auto nativePages = [](const GsSurface &s) {
-        return s.psm == GS_PSM_CT32 && s.scale == 1u && (s.base & 31u) == 0u &&
+    // Whole CT32 pages at the surface's own scale: GPU page copies between
+    // them keep an upscaled target's detail, where a resolve would bring it
+    // down to native and stall for the readback.
+    auto nativePages = [&surface](const GsSurface &s) {
+        return s.psm == GS_PSM_CT32 && s.scale == surface.scale && (s.base & 31u) == 0u &&
                s.width == s.bufferWidth * 64u && s.height % 32u == 0u &&
                s.pages.count() == s.bufferWidth * (s.height / 32u);
     };
@@ -893,15 +927,16 @@ bool GsTargetCache::importColorPages(GsSurface &surface,
             if (!shared.test(page)) continue;
             const uint32_t srcPage = (page + kGsPageCount - (source->base >> 5u)) % kGsPageCount;
             const uint32_t dstPage = (page + kGsPageCount - (surface.base >> 5u)) % kGsPageCount;
+            const uint32_t scale = std::max(surface.scale, 1u);
             SDL_GPUTextureLocation from{};
             from.texture = source->texture;
-            from.x = (srcPage % source->bufferWidth) * 64u;
-            from.y = (srcPage / source->bufferWidth) * 32u;
+            from.x = (srcPage % source->bufferWidth) * 64u * scale;
+            from.y = (srcPage / source->bufferWidth) * 32u * scale;
             SDL_GPUTextureLocation to{};
             to.texture = surface.texture;
-            to.x = (dstPage % surface.bufferWidth) * 64u;
-            to.y = (dstPage / surface.bufferWidth) * 32u;
-            SDL_CopyGPUTextureToTexture(copy, &from, &to, 64u, 32u, 1u, false);
+            to.x = (dstPage % surface.bufferWidth) * 64u * scale;
+            to.y = (dstPage / surface.bufferWidth) * 32u * scale;
+            SDL_CopyGPUTextureToTexture(copy, &from, &to, 64u * scale, 32u * scale, 1u, false);
         }
     }
     SDL_EndGPUCopyPass(copy);
@@ -1073,9 +1108,15 @@ bool GsTargetCache::downloadScaled(GsSurface &surface,
 // when the surface is scaled.
 bool GsTargetCache::applyCpuPatches(GsSurface &surface, std::string &error) {
     if (surface.cpuPatches.empty()) return true;
+    // Patches are in GS pixels; an upscaled surface takes each as a
+    // scale x scale block, like an upload of the whole surface would.
+    const uint32_t scale = std::max(surface.scale, 1u);
+    const auto patchBytes = [scale](const GsRegion &region) {
+        return (region.width() * scale * region.height() * scale * 4u + 255u) & ~255u;
+    };
     uint32_t bytes = 0u;
     for (const auto &region : surface.cpuPatches)
-        bytes += (region.width() * region.height() * 4u + 255u) & ~255u;
+        bytes += patchBytes(region);
     SDL_GPUDevice *device = m_device.handle();
     if (!m_upload || m_uploadCapacity < bytes) {
         if (m_upload) SDL_ReleaseGPUTransferBuffer(device, m_upload);
@@ -1093,12 +1134,29 @@ bool GsTargetCache::applyCpuPatches(GsSurface &surface, std::string &error) {
     auto *mapped = static_cast<uint8_t *>(SDL_MapGPUTransferBuffer(device, m_upload, true));
     if (!mapped) return fail("SDL_MapGPUTransferBuffer");
     uint32_t offset = 0u;
+    std::vector<uint32_t> row, wide;
     for (const auto &region : surface.cpuPatches) {
-        for (uint32_t y = region.y0; y < region.y1; ++y)
+        const uint32_t width = region.width();
+        for (uint32_t y = region.y0; y < region.y1; ++y) {
+            uint8_t *out = mapped + offset + size_t(y - region.y0) * scale * width * scale * 4u;
+            if (scale == 1u) {
+                GSMem::ReadRowCT32(m_vram.data(), surface.base, surface.bufferWidth,
+                                   region.x0, y, width, out);
+                continue;
+            }
+            row.resize(width);
             GSMem::ReadRowCT32(m_vram.data(), surface.base, surface.bufferWidth,
-                               region.x0, y, region.width(),
-                               mapped + offset + (y - region.y0) * region.width() * 4u);
-        offset += (region.width() * region.height() * 4u + 255u) & ~255u;
+                               region.x0, y, width, reinterpret_cast<uint8_t *>(row.data()));
+            // Expanded aside and only written out: upload buffers are
+            // write-combined, so copying a row back out of one is very slow.
+            wide.resize(size_t(width) * scale);
+            for (uint32_t x = 0u; x < width; ++x)
+                for (uint32_t sx = 0u; sx < scale; ++sx)
+                    wide[size_t(x) * scale + sx] = row[x];
+            for (uint32_t sy = 0u; sy < scale; ++sy)
+                std::memcpy(out + size_t(sy) * width * scale * 4u, wide.data(), size_t(width) * scale * 4u);
+        }
+        offset += patchBytes(region);
     }
     SDL_UnmapGPUTransferBuffer(device, m_upload);
     SDL_GPUCommandBuffer *commands = SDL_AcquireGPUCommandBuffer(device);
@@ -1114,18 +1172,18 @@ bool GsTargetCache::applyCpuPatches(GsSurface &surface, std::string &error) {
         SDL_GPUTextureTransferInfo source{};
         source.transfer_buffer = m_upload;
         source.offset = offset;
-        source.pixels_per_row = region.width();
-        source.rows_per_layer = region.height();
+        source.pixels_per_row = region.width() * scale;
+        source.rows_per_layer = region.height() * scale;
         SDL_GPUTextureRegion destination{};
         destination.texture = surface.texture;
-        destination.x = region.x0;
-        destination.y = region.y0;
-        destination.w = region.width();
-        destination.h = region.height();
+        destination.x = region.x0 * scale;
+        destination.y = region.y0 * scale;
+        destination.w = region.width() * scale;
+        destination.h = region.height() * scale;
         destination.d = 1u;
         SDL_UploadToGPUTexture(copy, &source, &destination, false);
         pixels += uint64_t(region.width()) * region.height();
-        offset += (region.width() * region.height() * 4u + 255u) & ~255u;
+        offset += patchBytes(region);
     }
     SDL_EndGPUCopyPass(copy);
     if (!SDL_SubmitGPUCommandBuffer(commands)) return fail("SDL_SubmitGPUCommandBuffer");

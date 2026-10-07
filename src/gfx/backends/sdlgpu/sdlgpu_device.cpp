@@ -3,6 +3,7 @@
 #include "gs_draw.frag.spv.h"
 #include "gs_draw.vert.spv.h"
 #include "gs_index8.frag.spv.h"
+#include "gs_local_copy.frag.spv.h"
 #include "gs_reinterpret.frag.spv.h"
 #include "gs_reinterpret.vert.spv.h"
 #ifdef DQ8_GFX_HAS_MSL
@@ -10,6 +11,7 @@
 #include "gs_draw.frag.fetch.msl.h"
 #include "gs_draw.vert.msl.h"
 #include "gs_index8.frag.msl.h"
+#include "gs_local_copy.frag.msl.h"
 #include "gs_reinterpret.frag.msl.h"
 #include "gs_reinterpret.vert.msl.h"
 #endif
@@ -270,6 +272,9 @@ void SdlGpuDevice::destroy() {
     if (m_reinterpretPipeline)
         SDL_ReleaseGPUGraphicsPipeline(m_device, m_reinterpretPipeline);
     m_reinterpretPipeline = nullptr;
+    if (m_localCopyPipeline)
+        SDL_ReleaseGPUGraphicsPipeline(m_device, m_localCopyPipeline);
+    m_localCopyPipeline = nullptr;
     if (m_displayPipeline)
         SDL_ReleaseGPUGraphicsPipeline(m_device, m_displayPipeline);
     m_displayPipeline = nullptr;
@@ -295,7 +300,7 @@ std::string SdlGpuDevice::driverName() const {
 }
 
 bool SdlGpuDevice::reinterpretColor(SDL_GPUTexture *source, SDL_GPUTexture *destination,
-                                    uint32_t width, uint32_t height, bool destination16,
+                                    uint32_t width, uint32_t height, bool destination16, uint32_t scale,
                                     std::string &error) {
     if (!m_reinterpretPipeline) {
         SDL_GPUShaderCreateInfo vertexInfo{};
@@ -371,16 +376,180 @@ bool SdlGpuDevice::reinterpretColor(SDL_GPUTexture *source, SDL_GPUTexture *dest
         return false;
     }
     SDL_BindGPUGraphicsPipeline(pass, m_reinterpretPipeline);
-    SDL_GPUViewport viewport{0.0f, 0.0f, float(width), float(height), 0.0f, 1.0f};
+    scale = std::max(scale, 1u);
+    SDL_GPUViewport viewport{0.0f, 0.0f, float(width * scale), float(height * scale), 0.0f, 1.0f};
     SDL_SetGPUViewport(pass, &viewport);
     SDL_GPUTextureSamplerBinding binding{source, m_sampler};
     SDL_BindGPUFragmentSamplers(pass, 0u, &binding, 1u);
-    const uint32_t control[4] = {uint32_t(destination16), 0u, 0u, 0u};
+    const uint32_t control[4] = {uint32_t(destination16), scale, 0u, 0u};
     SDL_PushGPUFragmentUniformData(commands, 0u, control, sizeof(control));
     SDL_DrawGPUPrimitives(pass, 3u, 1u, 0u, 0u);
     SDL_EndGPURenderPass(pass);
     if (!SDL_SubmitGPUCommandBuffer(commands)) {
         error = std::string("SDL_SubmitGPUCommandBuffer(reinterpret): ") + SDL_GetError();
+        return false;
+    }
+    return true;
+}
+
+bool SdlGpuDevice::localCopy(SDL_GPUTexture *source, SDL_GPUTexture *destination, uint32_t width,
+                             uint32_t height, uint32_t scale, const SDL_Rect &box,
+                             const std::vector<uint32_t> &mapping, std::string &error) {
+    if (box.w <= 0 || box.h <= 0 || mapping.size() != size_t(box.w) * size_t(box.h) * 4u) {
+        error = "localCopy: mapping does not match its box";
+        return false;
+    }
+    if (!m_localCopyPipeline) {
+        SDL_GPUShaderCreateInfo vertexInfo{};
+        vertexInfo.code = reinterpret_cast<const uint8_t *>(kGsReinterpretVertSpirv);
+        vertexInfo.code_size = sizeof(kGsReinterpretVertSpirv);
+        vertexInfo.entrypoint = "main";
+        vertexInfo.format = SDL_GPU_SHADERFORMAT_SPIRV;
+        vertexInfo.stage = SDL_GPU_SHADERSTAGE_VERTEX;
+        SDL_GPUShaderCreateInfo fragmentInfo{};
+        fragmentInfo.code = reinterpret_cast<const uint8_t *>(kGsLocalCopyFragSpirv);
+        fragmentInfo.code_size = sizeof(kGsLocalCopyFragSpirv);
+        fragmentInfo.entrypoint = "main";
+        fragmentInfo.format = SDL_GPU_SHADERFORMAT_SPIRV;
+        fragmentInfo.stage = SDL_GPU_SHADERSTAGE_FRAGMENT;
+        fragmentInfo.num_samplers = 3u;
+        fragmentInfo.num_uniform_buffers = 1u;
+#ifdef DQ8_GFX_HAS_MSL
+        if ((SDL_GetGPUShaderFormats(m_device) & SDL_GPU_SHADERFORMAT_MSL) != 0) {
+            vertexInfo.code = reinterpret_cast<const uint8_t *>(kGsReinterpretVertSpirvMsl);
+            vertexInfo.code_size = sizeof(kGsReinterpretVertSpirvMsl);
+            vertexInfo.entrypoint = "main0";
+            vertexInfo.format = SDL_GPU_SHADERFORMAT_MSL;
+            fragmentInfo.code = reinterpret_cast<const uint8_t *>(kGsLocalCopyFragSpirvMsl);
+            fragmentInfo.code_size = sizeof(kGsLocalCopyFragSpirvMsl);
+            fragmentInfo.entrypoint = "main0";
+            fragmentInfo.format = SDL_GPU_SHADERFORMAT_MSL;
+        }
+#endif
+        SDL_GPUShader *vertex = SDL_CreateGPUShader(m_device, &vertexInfo);
+        if (!vertex) {
+            error = std::string("SDL_CreateGPUShader(local copy vertex): ") + SDL_GetError();
+            return false;
+        }
+        SDL_GPUShader *fragment = SDL_CreateGPUShader(m_device, &fragmentInfo);
+        if (!fragment) {
+            error = std::string("SDL_CreateGPUShader(local copy fragment): ") + SDL_GetError();
+            SDL_ReleaseGPUShader(m_device, vertex);
+            return false;
+        }
+        SDL_GPUColorTargetDescription colorTarget{};
+        colorTarget.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+        SDL_GPUGraphicsPipelineCreateInfo info{};
+        info.vertex_shader = vertex;
+        info.fragment_shader = fragment;
+        info.primitive_type = SDL_GPU_PRIMITIVETYPE_TRIANGLELIST;
+        info.rasterizer_state.fill_mode = SDL_GPU_FILLMODE_FILL;
+        info.rasterizer_state.cull_mode = SDL_GPU_CULLMODE_NONE;
+        info.multisample_state.sample_count = SDL_GPU_SAMPLECOUNT_1;
+        info.target_info.color_target_descriptions = &colorTarget;
+        info.target_info.num_color_targets = 1u;
+        m_localCopyPipeline = SDL_CreateGPUGraphicsPipeline(m_device, &info);
+        SDL_ReleaseGPUShader(m_device, fragment);
+        SDL_ReleaseGPUShader(m_device, vertex);
+        if (!m_localCopyPipeline) {
+            error = std::string("SDL_CreateGPUGraphicsPipeline(local copy): ") + SDL_GetError();
+            return false;
+        }
+    }
+
+    scale = std::max(scale, 1u);
+    // Released at once: SDL keeps them alive until the GPU is done with them.
+    SDL_GPUTextureCreateInfo snapshotInfo{};
+    snapshotInfo.type = SDL_GPU_TEXTURETYPE_2D;
+    snapshotInfo.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+    snapshotInfo.width = width * scale;
+    snapshotInfo.height = height * scale;
+    snapshotInfo.layer_count_or_depth = 1u;
+    snapshotInfo.num_levels = 1u;
+    snapshotInfo.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
+    SDL_GPUTexture *snapshot = SDL_CreateGPUTexture(m_device, &snapshotInfo);
+    SDL_GPUTextureCreateInfo mappingInfo = snapshotInfo;
+    mappingInfo.format = SDL_GPU_TEXTUREFORMAT_R32G32B32A32_UINT;
+    mappingInfo.width = static_cast<uint32_t>(box.w);
+    mappingInfo.height = static_cast<uint32_t>(box.h);
+    SDL_GPUTexture *mappingTexture = SDL_CreateGPUTexture(m_device, &mappingInfo);
+    SDL_GPUTransferBufferCreateInfo uploadInfo{};
+    uploadInfo.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+    uploadInfo.size = static_cast<uint32_t>(mapping.size() * sizeof(uint32_t));
+    SDL_GPUTransferBuffer *upload = SDL_CreateGPUTransferBuffer(m_device, &uploadInfo);
+    const auto release = [&] {
+        if (snapshot)
+            SDL_ReleaseGPUTexture(m_device, snapshot);
+        if (mappingTexture)
+            SDL_ReleaseGPUTexture(m_device, mappingTexture);
+        if (upload)
+            SDL_ReleaseGPUTransferBuffer(m_device, upload);
+    };
+    const auto fail = [&](const char *what) {
+        error = std::string(what) + ": " + SDL_GetError();
+        release();
+        return false;
+    };
+    if (!snapshot || !mappingTexture || !upload)
+        return fail("SDL_CreateGPU*(local copy)");
+    void *mapped = SDL_MapGPUTransferBuffer(m_device, upload, false);
+    if (!mapped)
+        return fail("SDL_MapGPUTransferBuffer(local copy)");
+    std::memcpy(mapped, mapping.data(), mapping.size() * sizeof(uint32_t));
+    SDL_UnmapGPUTransferBuffer(m_device, upload);
+
+    SDL_GPUCommandBuffer *commands = SDL_AcquireGPUCommandBuffer(m_device);
+    if (!commands)
+        return fail("SDL_AcquireGPUCommandBuffer(local copy)");
+    SDL_GPUCopyPass *copy = SDL_BeginGPUCopyPass(commands);
+    if (!copy) {
+        SDL_CancelGPUCommandBuffer(commands);
+        return fail("SDL_BeginGPUCopyPass(local copy)");
+    }
+    SDL_GPUTextureLocation from{};
+    from.texture = destination;
+    SDL_GPUTextureLocation to{};
+    to.texture = snapshot;
+    SDL_CopyGPUTextureToTexture(copy, &from, &to, width * scale, height * scale, 1u, false);
+    const SDL_GPUTextureTransferInfo mappingFrom{upload, 0u, static_cast<uint32_t>(box.w),
+                                                 static_cast<uint32_t>(box.h)};
+    SDL_GPUTextureRegion mappingTo{};
+    mappingTo.texture = mappingTexture;
+    mappingTo.w = static_cast<uint32_t>(box.w);
+    mappingTo.h = static_cast<uint32_t>(box.h);
+    mappingTo.d = 1u;
+    SDL_UploadToGPUTexture(copy, &mappingFrom, &mappingTo, false);
+    SDL_EndGPUCopyPass(copy);
+
+    SDL_GPUColorTargetInfo target{};
+    target.texture = destination;
+    target.load_op = SDL_GPU_LOADOP_LOAD;
+    target.store_op = SDL_GPU_STOREOP_STORE;
+    SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(commands, &target, 1u, nullptr);
+    if (!pass) {
+        SDL_CancelGPUCommandBuffer(commands);
+        return fail("SDL_BeginGPURenderPass(local copy)");
+    }
+    SDL_BindGPUGraphicsPipeline(pass, m_localCopyPipeline);
+    const SDL_GPUViewport viewport{float(box.x * int(scale)), float(box.y * int(scale)),
+                                   float(box.w * int(scale)), float(box.h * int(scale)), 0.0f, 1.0f};
+    SDL_SetGPUViewport(pass, &viewport);
+    const SDL_Rect scissor{box.x * int(scale), box.y * int(scale), box.w * int(scale), box.h * int(scale)};
+    SDL_SetGPUScissor(pass, &scissor);
+    const SDL_GPUTextureSamplerBinding bindings[3] = {
+        {source == destination ? snapshot : source, m_sampler},
+        {snapshot, m_sampler},
+        {mappingTexture, m_sampler},
+    };
+    SDL_BindGPUFragmentSamplers(pass, 0u, bindings, 3u);
+    const uint32_t control[4] = {scale, static_cast<uint32_t>(box.x), static_cast<uint32_t>(box.y), 0u};
+    SDL_PushGPUFragmentUniformData(commands, 0u, control, sizeof(control));
+    SDL_DrawGPUPrimitives(pass, 3u, 1u, 0u, 0u);
+    SDL_EndGPURenderPass(pass);
+    const bool submitted = SDL_SubmitGPUCommandBuffer(commands);
+    release();
+    if (!submitted) {
+        error = std::string("SDL_SubmitGPUCommandBuffer(local copy): ") + SDL_GetError();
         return false;
     }
     return true;

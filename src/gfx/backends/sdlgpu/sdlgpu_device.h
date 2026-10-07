@@ -90,6 +90,11 @@ inline constexpr uint32_t kFragFlagTcc = 1u << 2u;
 inline constexpr uint32_t kFragFlagFge = 1u << 3u;
 inline constexpr uint32_t kFragFlagAte = 1u << 4u;
 inline constexpr uint32_t kFragFlagLinear = 1u << 5u;
+// Point-sampled UV (2D) draw into an upscaled target: take each texel where
+// the GS would, at the native pixel's sample point. The target's scale sits
+// at kFragTargetScaleShift.
+inline constexpr uint32_t kFragFlagNativeGrid = 1u << 6u;
+inline constexpr uint32_t kFragTargetScaleShift = 24u;
 
 struct GsPipelineKey {
     uint32_t colorFormat = 0u;
@@ -132,10 +137,11 @@ public:
     // the set of distinct GS states a game uses is small and bounded.
     SDL_GPUGraphicsPipeline *pipeline(const GsPipelineKey &key, std::string &error);
 
-    // Reinterprets identical native GS pages between CT32 and CT16 views.
+    // Reinterprets identical GS pages between CT32 and CT16 views, of
+    // width x height GS pixels at `scale` physical pixels each.
     // The caller validates extents/ownership and commits their state afterward.
     bool reinterpretColor(SDL_GPUTexture *source, SDL_GPUTexture *destination,
-                          uint32_t width, uint32_t height, bool destination16,
+                          uint32_t width, uint32_t height, bool destination16, uint32_t scale,
                           std::string &error);
 
     // Builds an 8-bit indexed texture from the CT32 target holding its bytes,
@@ -144,6 +150,14 @@ public:
     bool expandIndexed8(SDL_GPUTexture *target, const uint32_t *palette, SDL_GPUTexture *destination,
                         uint32_t width, uint32_t height, const SDL_Rect &region,
                         const std::array<uint32_t, 4> &pages, std::string &error);
+
+    // A GS local-to-local transfer between CT32 targets at the same scale.
+    // `mapping` holds four codes per pixel of `box` in the destination (see
+    // gs_local_copy.frag). `source` may be `destination`; both are read from
+    // before the pass writes.
+    bool localCopy(SDL_GPUTexture *source, SDL_GPUTexture *destination, uint32_t width, uint32_t height,
+                   uint32_t scale, const SDL_Rect &box, const std::vector<uint32_t> &mapping,
+                   std::string &error);
 
     bool composeDisplay(SDL_GPUTexture *circuit1, SDL_GPUTexture *circuit2,
                         SDL_GPUTexture *destination, uint32_t width, uint32_t height,
@@ -171,6 +185,7 @@ private:
     void releaseIndex8();
 
     SDL_GPUGraphicsPipeline *m_reinterpretPipeline = nullptr;
+    SDL_GPUGraphicsPipeline *m_localCopyPipeline = nullptr;
     SDL_GPUGraphicsPipeline *m_displayPipeline = nullptr;
     SDL_GPUGraphicsPipeline *m_index8Pipeline = nullptr;
     SDL_GPUTexture *m_index8Palette = nullptr;

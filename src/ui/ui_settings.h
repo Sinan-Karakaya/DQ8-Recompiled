@@ -18,7 +18,8 @@ struct Settings {
     int windowHeight = 0;
 
     // Picture
-    gfx::SdlGpuDisplayOptions display{};
+    // The game drops the line blend; the renderer's default keeps it for the tools.
+    gfx::SdlGpuDisplayOptions display{.removeLineBlend = true};
     uint32_t resolutionScale = 1u;
 
     // Sound

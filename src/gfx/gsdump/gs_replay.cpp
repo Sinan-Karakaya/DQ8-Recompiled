@@ -310,7 +310,7 @@ bool replayDump(const GsDumpFile &dump, const ReplayOptions &options,
         // written back.
         hardware->Sync(GSSyncReason::Reset);
         const SdlGpuStats gpu = hardware->stats();
-        char report[1024];
+        char report[1536];
         std::snprintf(
             report, sizeof(report),
             "SDL GPU (%s, scale %ux): primitives=%llu drawn=%llu triangles=%llu "
@@ -322,7 +322,7 @@ bool replayDump(const GsDumpFile &dump, const ReplayOptions &options,
             "  approximated: blends=%llu saturated-blend-factors=%llu "
             "dest-alpha-factors=%llu partial-masks=%llu dest-alpha-tests=%llu "
             "afail-modes=%llu no-colclamp=%llu textured=%llu untranslated-textures=%llu "
-            "second-circuit=%llu",
+            "second-circuit=%llu widened-alpha-replays=%llu interrupted-covered-transfers=%llu",
             hardware->driverName().c_str(), hardware->resolutionScale(),
             static_cast<unsigned long long>(gpu.primitivesSubmitted),
             static_cast<unsigned long long>(gpu.primitivesDrawn),
@@ -356,7 +356,9 @@ bool replayDump(const GsDumpFile &dump, const ReplayOptions &options,
             static_cast<unsigned long long>(gpu.disabledColorClamps),
             static_cast<unsigned long long>(gpu.texturedPrimitives),
             static_cast<unsigned long long>(gpu.untranslatedTextures),
-            static_cast<unsigned long long>(gpu.secondaryDisplayCircuits));
+            static_cast<unsigned long long>(gpu.secondaryDisplayCircuits),
+            static_cast<unsigned long long>(gpu.widenedAlphaReplays),
+            static_cast<unsigned long long>(gpu.interruptedCoveredTransfers));
         stats.backendReport = report;
         const std::string backendError = hardware->lastError();
         if (!backendError.empty())

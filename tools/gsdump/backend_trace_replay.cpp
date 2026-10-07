@@ -88,14 +88,14 @@ int main(int argc, char **argv) try {
             if (traceDraws) {
                 const auto &s = batch.state;
                 const auto &c = s.context;
-                std::printf("draw=%llu frame=%llu type=%u dst=%x/%u/%u mask=%08x src=%x/%u/%u %ux%u tme=%u abe=%u alpha=%llx test=%llx linear=%u clamp=%llx zbuf=%x/%u/%u\n",
+                std::printf("draw=%llu frame=%llu type=%u dst=%x/%u/%u mask=%08x src=%x/%u/%u %ux%u tme=%u abe=%u alpha=%llx test=%llx linear=%u clamp=%llx zbuf=%x/%u/%u tex1=%llx\n",
                     static_cast<unsigned long long>(draws), static_cast<unsigned long long>(frames),
                     s.prim.type, c.frame.fbp * 32u, c.frame.fbw, c.frame.psm, c.frame.fbmsk,
                     c.tex0.tbp0, c.tex0.tbw, c.tex0.psm, s.textureWidth, s.textureHeight,
                     s.prim.tme, s.prim.abe, static_cast<unsigned long long>(c.alpha),
                     static_cast<unsigned long long>(c.test), s.linearFilter,
                     static_cast<unsigned long long>(c.clamp), c.zbuf.zbp * 32u,
-                    c.zbuf.psm, c.zbuf.zmask);
+                    c.zbuf.psm, c.zbuf.zmask, static_cast<unsigned long long>(c.tex1));
                 for (unsigned i = 0; i < batch.vertexCount; ++i) {
                     const auto &v = batch.vertices[i];
                     std::printf("  xy=%.4f,%.4f z=%.0f uv=%u,%u stq=%.5g,%.5g,%.5g rgba=%u,%u,%u,%u\n",
@@ -214,18 +214,20 @@ int main(int argc, char **argv) try {
     std::printf("vram-hash=%016llx\n", static_cast<unsigned long long>(hash));
     if (gpu) {
         const auto s = gpu->stats();
-        std::printf("resolves=%llu resolved-pixels=%llu refreshes=%llu draws=%llu passes=%llu feedback-copies=%llu\n",
+        std::printf("resolves=%llu resolved-pixels=%llu refreshes=%llu draws=%llu passes=%llu feedback-copies=%llu gpu-local-copies=%llu\n",
             static_cast<unsigned long long>(s.colorResolves), static_cast<unsigned long long>(s.resolvedPixels),
             static_cast<unsigned long long>(s.colorRefreshes), static_cast<unsigned long long>(s.drawCalls),
             static_cast<unsigned long long>(s.renderPasses),
-            static_cast<unsigned long long>(s.feedbackCopies));
+            static_cast<unsigned long long>(s.feedbackCopies),
+            static_cast<unsigned long long>(s.gpuLocalCopies));
         std::printf("presents: native=%llu cpu-composed=%llu gpu-composed=%llu\n",
             static_cast<unsigned long long>(s.nativePresents),
             static_cast<unsigned long long>(s.composedPresents),
             static_cast<unsigned long long>(s.gpuComposedPresents));
         std::printf("approximations: blends=%llu saturated=%llu destination-alpha-factor=%llu "
                     "bit-masks=%llu destination-alpha-test=%llu alpha-fail=%llu "
-                    "color-wrap=%llu untranslated-textures=%llu\n",
+                    "color-wrap=%llu untranslated-textures=%llu widened-alpha-replays=%llu "
+                    "interrupted-covered-transfers=%llu\n",
             static_cast<unsigned long long>(s.inexactBlends),
             static_cast<unsigned long long>(s.saturatedBlendFactors),
             static_cast<unsigned long long>(s.destinationAlphaFactors),
@@ -233,7 +235,9 @@ int main(int argc, char **argv) try {
             static_cast<unsigned long long>(s.destinationAlphaTests),
             static_cast<unsigned long long>(s.alphaFailModes),
             static_cast<unsigned long long>(s.disabledColorClamps),
-            static_cast<unsigned long long>(s.untranslatedTextures));
+            static_cast<unsigned long long>(s.untranslatedTextures),
+            static_cast<unsigned long long>(s.widenedAlphaReplays),
+            static_cast<unsigned long long>(s.interruptedCoveredTransfers));
     }
 } catch (const std::exception &e) {
     std::fprintf(stderr, "%s\n", e.what()); return 1;
