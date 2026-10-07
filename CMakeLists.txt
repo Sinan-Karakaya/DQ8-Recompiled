@@ -153,6 +153,14 @@ if(DQ8_BUILD_PS2RECOMP)
         # Keep --trace-printf available even when the compiler omits _DEBUG.
         target_compile_definitions(ps2_runtime PRIVATE RUNTIME_DECI2CALL)
     endif()
+
+    # Optional -march for the runtime. FP contraction stays off: an FMA rounds
+    # once where the PS2 rounds twice.
+    set(DQ8_RUNTIME_ARCH "" CACHE STRING
+        "Target CPU for ps2_runtime (-march value, e.g. native or x86-64-v3); empty keeps the default")
+    if(DQ8_RUNTIME_ARCH AND TARGET ps2_runtime)
+        target_compile_options(ps2_runtime PRIVATE -march=${DQ8_RUNTIME_ARCH} -ffp-contract=off)
+    endif()
 endif()
 
 add_subdirectory(src)
