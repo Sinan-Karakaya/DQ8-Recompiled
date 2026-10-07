@@ -71,6 +71,12 @@ if(TARGET dq8_gfx_sdlgpu)
 endif()
 
 if(TARGET ZLIB::ZLIB)
+    # zlib.h is in every macOS SDK. CMake finds xcrun's, which a compiler on
+    # another SDK (Homebrew LLVM uses the Command Line Tools one) would get as
+    # -isystem, ahead of libc++'s own C headers.
+    if(APPLE AND ZLIB_INCLUDE_DIRS MATCHES "\\.sdk/usr/include$")
+        set_property(TARGET ZLIB::ZLIB PROPERTY INTERFACE_INCLUDE_DIRECTORIES "")
+    endif()
     target_link_libraries(dq8-gsreplay PRIVATE ZLIB::ZLIB)
     target_compile_definitions(dq8-gsreplay PRIVATE DQ8_GSDUMP_HAVE_ZLIB=1)
 else()
