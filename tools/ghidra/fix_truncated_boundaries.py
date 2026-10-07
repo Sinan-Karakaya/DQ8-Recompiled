@@ -135,6 +135,17 @@ def jump_target(addr: int, raw: int) -> int | None:
     return ((addr + 4) & 0xF0000000) | ((raw & 0x03FFFFFF) << 2)
 
 
+# BLTZAL BGEZAL BLTZALL BGEZALL: calls like `jal`, so they say nothing about whose code a block is.
+REGIMM_LINK_RT = {0x10, 0x11, 0x12, 0x13}
+
+
+def local_branch_target(addr: int, raw: int) -> int | None:
+    """Return the target of a PC-relative branch that is not a call, or None."""
+    if raw >> 26 == REGIMM_OPCODE and ((raw >> 16) & 0x1F) in REGIMM_LINK_RT:
+        return None
+    return branch_target(addr, raw)
+
+
 def ends_flow(raw: int) -> bool:
     """True for `j`, `jr` and `b`, after which execution never reaches the next pair."""
     opcode = raw >> 26
@@ -151,7 +162,7 @@ def enters(blob: bytes, segments: list[Segment], code: list[tuple[int, int]],
             raw = word_at(blob, segments, addr)
             if raw is None:
                 break
-            target = branch_target(addr, raw)
+            target = local_branch_target(addr, raw)
             if target is None:
                 target = jump_target(addr, raw)
             if target is not None and hole[0] <= target < hole[1]:
@@ -202,7 +213,7 @@ def repair_outlined_tails(rows: list[dict], blob: bytes, segments: list[Segment]
             if raw is None:
                 targets = []
                 break
-            target = branch_target(addr, raw)
+            target = local_branch_target(addr, raw)
             if target is not None and not hole_start <= target < hole_end:
                 targets.append(target)
         if targets:

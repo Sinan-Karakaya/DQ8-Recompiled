@@ -86,6 +86,37 @@ class OutlinedTailTests(unittest.TestCase):
         ends, _ = self.run_tool(words, rows)
         self.assertEqual(ends["F"], BASE + 0x38)
 
+    def test_a_call_is_no_way_in(self):
+        # `bgezal $zero` (bal) calls like `jal`, so the block is a callee even if it branches back.
+        jal = (0x03 << 26) | ((BASE + 0x30) >> 2)
+        bal = branch(0x01, 0, 0x11, BASE + 0x00, BASE + 0x30)
+        for name, call in (("jal", jal), ("bgezal", bal)):
+            with self.subTest(call=name):
+                words = [
+                    call, NOP, JR_RA, NOP,                                  # 0x100000 F
+                    JR_RA, NOP, NOP, NOP, NOP, NOP, NOP, NOP,               # 0x100010 G
+                    0x24020001, branch(0x04, 0, 0, BASE + 0x34, BASE + 0x08), NOP, NOP,
+                    JR_RA, NOP,                                             # 0x100040 H
+                ]
+                rows = [("F", BASE, BASE + 0x10), ("G", BASE + 0x10, BASE + 0x30),
+                        ("H", BASE + 0x40, BASE + 0x48)]
+                ends, stderr = self.run_tool(words, rows)
+                self.assertEqual(ends["F"], BASE + 0x10)
+                self.assertIn("UNREACHED F 0x00100000: 0x00100030-0x00100040", stderr)
+
+    def test_a_call_is_no_way_back(self):
+        words = [
+            branch(0x04, 4, 0, BASE + 0x00, BASE + 0x30), NOP, JR_RA, NOP,  # 0x100000 F
+            JR_RA, NOP, NOP, NOP, NOP, NOP, NOP, NOP,                       # 0x100010 G
+            # 0x100030 unmapped: only a `bgezal` leads into F.
+            branch(0x01, 0, 0x11, BASE + 0x30, BASE + 0x08), NOP, JR_RA, NOP,
+            JR_RA, NOP,                                                     # 0x100040 H
+        ]
+        rows = [("F", BASE, BASE + 0x10), ("G", BASE + 0x10, BASE + 0x30),
+                ("H", BASE + 0x40, BASE + 0x48)]
+        ends, _ = self.run_tool(words, rows)
+        self.assertEqual(ends["F"], BASE + 0x10)
+
 
 if __name__ == "__main__":
     unittest.main()
