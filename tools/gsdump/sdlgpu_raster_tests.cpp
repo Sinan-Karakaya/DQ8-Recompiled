@@ -1958,6 +1958,82 @@ bool undersizedLiveTargetCase(Harness &harness) {
 
 } // namespace
 
+// GS local-to-local transfers between two GPU-owned CT32 targets run on the
+// GPU. Every byte of GS memory must match the CPU backend, at 1x and scaled.
+bool gpuLocalCopyCase(Harness &harness) {
+    struct Copy {
+        const char *name;
+        uint32_t psm;
+        uint32_t sx, sy, dx, dy, width, height;
+    };
+    // Two CT32 surfaces 128x64 (four 8 KiB pages each). Rectangles are in the
+    // copied format's own pixels: T8 pages are 128x64, CT16 64x64, CT32/24 64x32.
+    const Copy copies[] = {
+        {"T8", GS_PSM_T8, 8u, 4u, 40u, 70u, 32u, 16u},
+        {"CT16", GS_PSM_CT16, 6u, 10u, 70u, 40u, 24u, 20u},
+        {"CT24", GS_PSM_CT24, 3u, 5u, 66u, 33u, 20u, 12u},
+        {"CT32", GS_PSM_CT32, 1u, 2u, 70u, 30u, 40u, 24u},
+    };
+    constexpr uint32_t kSourcePage = kFramePage;
+    constexpr uint32_t kDestinationPage = kFramePage + 8u;
+    for (const uint32_t scale : {1u, 2u, 3u}) {
+        harness.gpu->setResolutionScale(scale);
+        for (const Copy &copy : copies) {
+            harness.begin();
+            uint32_t random = 0x5bd1e995u ^ copy.psm ^ (scale << 8u);
+            for (uint32_t i = 0u; i < kVramBytes; i += 4u) {
+                random ^= random << 13u;
+                random ^= random >> 17u;
+                random ^= random << 5u;
+                std::memcpy(harness.gpuVram.data() + i, &random, sizeof(random));
+            }
+            harness.cpuVram = harness.gpuVram;
+            harness.cpu.Initialize(harness.cpuVram.data(), kVramBytes);
+            // Draw into both surfaces so that the GPU owns their pages.
+            GSDrawState source = baseState(), destination = baseState();
+            source.context.frame.fbp = kSourcePage;
+            destination.context.frame.fbp = kDestinationPage;
+            harness.submit(spriteBatch(source, 4, 2, 120, 60, rgba(200, 40, 90, 120)));
+            harness.submit(spriteBatch(destination, 10, 6, 100, 50, rgba(20, 160, 60, 40)));
+
+            GSTransferCommand command{};
+            command.direction = 2u;
+            command.bitbltbuf.sbp = kSourcePage << 5u;
+            command.bitbltbuf.dbp = kDestinationPage << 5u;
+            command.bitbltbuf.sbw = command.bitbltbuf.dbw = kFrameWidthBlocks;
+            command.bitbltbuf.spsm = command.bitbltbuf.dpsm = copy.psm;
+            command.trxpos.ssax = copy.sx;
+            command.trxpos.ssay = copy.sy;
+            command.trxpos.dsax = copy.dx;
+            command.trxpos.dsay = copy.dy;
+            command.trxreg.rrw = copy.width;
+            command.trxreg.rrh = copy.height;
+            const uint64_t before = harness.gpu->stats().gpuLocalCopies;
+            harness.gpu->BeginTransfer(command);
+            harness.cpu.BeginTransfer(command);
+            if (reportBackendError(harness, "GPU local copy"))
+                return false;
+            if (harness.gpu->stats().gpuLocalCopies != before + 1u) {
+                std::fprintf(stderr, "FAIL: %s local copy at %ux should run on the GPU\n", copy.name, scale);
+                harness.gpu->setResolutionScale(1u);
+                return false;
+            }
+            harness.finish();
+            if (harness.snapshot != harness.cpuVram) {
+                size_t differing = 0u;
+                for (size_t i = 0u; i < harness.snapshot.size(); ++i)
+                    differing += harness.snapshot[i] != harness.cpuVram[i];
+                std::fprintf(stderr, "FAIL: %s local copy at %ux: %zu bytes of GS memory differ from the CPU path\n",
+                             copy.name, scale, differing);
+                harness.gpu->setResolutionScale(1u);
+                return false;
+            }
+        }
+    }
+    harness.gpu->setResolutionScale(1u);
+    return true;
+}
+
 int main() {
     std::string error;
     std::unique_ptr<dq8::gfx::SdlGpuBackend> backend = dq8::gfx::createSdlGpuBackend(error);
@@ -1992,7 +2068,7 @@ int main() {
         !disjointHostInvalidationCase(harness) ||
         !paddedLiveTargetCase(harness) ||
         !partialTargetRefreshCase(harness) || !independentTargetResolveCase(harness) ||
-        !opaqueSpriteRefreshCase(harness))
+        !opaqueSpriteRefreshCase(harness) || !gpuLocalCopyCase(harness))
         return 1;
 
     const dq8::gfx::SdlGpuStats stats = harness.gpu->stats();
