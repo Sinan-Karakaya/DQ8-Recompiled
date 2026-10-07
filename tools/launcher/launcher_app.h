@@ -33,6 +33,9 @@ void saveConfig(const LauncherConfig &config);
 // Compile jobs the machine can take: one a core, within memory.
 int defaultJobs();
 
+// Where a release keeps the game files by default: DQ8Recomp in the home folder.
+std::string defaultGamesFolder();
+
 // What the system's file pickers answered. They can answer on their own
 // thread, even after the window has closed, so each holds a share of this
 // rather than a pointer to the app.
@@ -49,10 +52,12 @@ const char *previewName(Preview preview);
 
 class LauncherApp {
 public:
+    // From a checkout, `repo` is it; from a release, `payload` carries the
+    // source and tools, and the build runs in the game files' folder.
     // `overrides` replaces the remembered disc, folder and jobs where set;
     // without `persist`, nothing is written (screenshots of the live app).
-    LauncherApp(std::filesystem::path repo, SDL_Window *window, const LauncherConfig &overrides = {},
-                bool persist = true);
+    LauncherApp(std::filesystem::path repo, std::optional<Payload> payload, SDL_Window *window,
+                const LauncherConfig &overrides = {}, bool persist = true);
     ~LauncherApp();
 
     void handleEvent(const SDL_Event &event);
@@ -72,8 +77,15 @@ private:
     void drawPlayPage();
     void drawFooter();
 
+    // Where the build runs and the game is started from.
+    std::filesystem::path buildRepo() const;
+    // Where the source is read before anything is built (hashes, the tree's parts).
+    std::filesystem::path sourceRoot() const;
+    ChildEnvironment childEnvironment() const;
+
     void setDisc(const std::string &path);
     void checkToolsAsync();
+    void runInstall(const InstallAction &action);
     void startBuild();
     void launchGame();
     void writeGameSettings();
@@ -82,6 +94,7 @@ private:
     void goTo(Page page);
 
     std::filesystem::path m_repo;
+    std::optional<Payload> m_payload;
     SDL_Window *m_window = nullptr;
     LauncherConfig m_config;
     Page m_page = Page::Disc;
@@ -99,6 +112,18 @@ private:
     std::atomic<bool> m_checkingTools{false};
     std::thread m_toolsThread;
     double m_copiedAt = -10.0;
+    // "Install for me": the system's installer runs on a thread that can
+    // outlive the window, so it shares this rather than the app.
+    struct InstallState {
+        std::mutex mutex;
+        std::string line, error;
+        std::atomic<bool> running{false}, finished{false}, openedInstaller{false};
+    };
+    std::shared_ptr<InstallState> m_install = std::make_shared<InstallState>();
+    // Apple's installer works on its own once opened: the page checks again
+    // every few seconds until the compiler appears.
+    bool m_waitingForInstaller = false;
+    double m_lastInstallCheck = 0.0;
 
     // Options page: the game's own settings, written before it starts.
     ui::Settings m_gameSettings;

@@ -2,6 +2,7 @@
 // run one after another on a worker thread, with progress the window draws.
 #pragma once
 
+#include "launcher_payload.h"
 #include "launcher_process.h"
 
 #include <array>
@@ -10,6 +11,7 @@
 #include <deque>
 #include <filesystem>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <unordered_map>
@@ -17,7 +19,9 @@
 
 namespace dq8::launcher {
 
-enum class Stage : uint8_t { CheckDisc, ExtractDisc, BuildRecompiler, TranslateGame, ConfigureGame, CompileGame, Count };
+enum class Stage : uint8_t {
+    CheckDisc, ExtractDisc, UnpackSource, BuildRecompiler, TranslateGame, ConfigureGame, CompileGame, Count
+};
 constexpr size_t kStageCount = static_cast<size_t>(Stage::Count);
 const char *stageTitle(Stage stage);
 
@@ -63,10 +67,12 @@ struct CompilePlan {
 };
 
 struct PipelineOptions {
-    std::filesystem::path repo;      // the DQ8Recomp source tree
+    std::filesystem::path repo;      // the DQ8Recomp source tree that builds
     std::filesystem::path disc;      // the user's disc image
     std::filesystem::path workspace; // where the disc's files are extracted
     int jobs = 1;                    // parallel compile jobs
+    // A release's tools and sources, unpacked into repo first; none from a checkout.
+    std::optional<Payload> payload;
 };
 
 // What the disc check found, for the window to show before anything is built.
@@ -101,6 +107,8 @@ private:
     bool command(Stage stage, const std::vector<std::string> &args, CompilePlan *plan = nullptr,
                  const std::function<void(const std::string &)> &watch = {});
     void set(Stage stage, double progress, const std::string &detail);
+    // Marks a stage that had nothing to do, with why.
+    void skip(Stage stage, const std::string &detail);
     void line(const std::string &text);
 
     mutable std::mutex m_mutex;

@@ -64,6 +64,7 @@ target_link_libraries(dq8_launcher_ui PUBLIC ${DQ8_LAUNCHER_SDL})
 add_library(dq8_launcher_core STATIC
     launcher_iso.cpp
     launcher_json.cpp
+    launcher_payload.cpp
     launcher_pipeline.cpp
     launcher_process.cpp
     launcher_sha256.cpp

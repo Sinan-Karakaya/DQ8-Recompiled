@@ -2,6 +2,7 @@
 // database's JSON, build progress and version parsing, and child processes.
 #include "launcher_iso.h"
 #include "launcher_json.h"
+#include "launcher_payload.h"
 #include "launcher_pipeline.h"
 #include "launcher_process.h"
 #include "launcher_sha256.h"
@@ -229,6 +230,58 @@ void compileCosts() {
     std::filesystem::remove_all(root, ec);
 }
 
+// A release's payload: found from its manifest, unpacked once per version,
+// never over a folder the launcher did not make.
+void payloadUnpacking() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "dq8-launcher-payload";
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    const std::filesystem::path payloadDir = root / "payload";
+    for (const char *dir : {"source/config", "fetch/spirv_cross-src", "deps/lib/pkgconfig", "tools/python/bin",
+                            "tools/cmake/bin", "tools/ninja/bin", "tools/pkgconf/bin"})
+        std::filesystem::create_directories(payloadDir / dir, ec);
+    std::ofstream(payloadDir / "source" / "setup.py") << "# setup";
+    std::ofstream(payloadDir / "fetch" / "spirv_cross-src" / "CMakeLists.txt") << "project(x)";
+    std::ofstream(payloadDir / "deps" / "lib" / "pkgconfig" / "sdl3.pc") << "Name: SDL3";
+    std::ofstream(payloadDir / "tools" / "python" / "bin" / "python3") << "python";
+    const auto manifest = [&](const char *version) {
+        std::ofstream(payloadDir / "payload.json", std::ios::trunc)
+            << R"({"version": ")" << version << R"(", "platform": "test", "paths": {"source": "source",
+               "fetch": "fetch", "deps": "deps", "python": "tools/python/bin/python3", "cmake": "tools/cmake/bin",
+               "ninja": "tools/ninja/bin", "pkgconf": "tools/pkgconf/bin/pkgconf"},
+               "versions": {"SDL3": "3.4.16", "CMake": "4.4.4"}, "fetched": ["spirv_cross-src"]})";
+    };
+    manifest("v1");
+    std::string error;
+    std::optional<Payload> payload = loadPayload(payloadDir, error);
+    require(payload && payload->version == "v1", "a payload loads from its manifest: " + error);
+    require(payload->versions.size() == 2u && payload->versions[0].first == "CMake",
+            "its tools in the Tools page's order");
+    const std::filesystem::path repo = root / "games" / "DQ8Recomp-source";
+    const std::vector<std::string> args = payloadCMakeArgs(*payload, repo);
+    require(std::find(args.begin(), args.end(),
+                      "-DFETCHCONTENT_SOURCE_DIR_SPIRV_CROSS=" +
+                          (repo / "build" / "fetch" / "spirv_cross-src").generic_string()) != args.end(),
+            "each fetched source stands in for its git clone");
+
+    require(unpackPayload(*payload, repo, {}, error) == Unpacked::Copied, "the first unpack copies: " + error);
+    require(std::filesystem::exists(repo / "setup.py") && std::filesystem::exists(repo / "build" / "deps" / "lib"),
+            "the source tree and the libraries land in the workspace");
+    require(unpackPayload(*payload, repo, {}, error) == Unpacked::AlreadyThere, "the same version is not copied again");
+    std::ofstream(repo / "build" / "kept.txt") << "a build";
+    manifest("v2");
+    payload = loadPayload(payloadDir, error);
+    require(unpackPayload(*payload, repo, {}, error) == Unpacked::Copied &&
+                std::filesystem::exists(repo / "build" / "kept.txt"),
+            "a new version replaces the source but keeps build/");
+
+    const std::filesystem::path checkout = root / "checkout";
+    std::filesystem::create_directories(checkout / ".git", ec);
+    require(unpackPayload(*payload, checkout, {}, error) == Unpacked::Failed && std::filesystem::exists(checkout / ".git"),
+            "a folder the launcher did not make is left alone");
+    std::filesystem::remove_all(root, ec);
+}
+
 // Play is offered only for the launcher's own finished build of this workspace.
 void builtMarker() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "dq8-launcher-built";
@@ -278,6 +331,7 @@ int main() try {
     jsonReader();
     progressAndVersions();
     compileCosts();
+    payloadUnpacking();
     builtMarker();
     childProcess();
     std::puts("PASS: launcher hashing, ISO reader, JSON, progress, compile costs, versions and child processes");

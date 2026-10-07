@@ -34,9 +34,18 @@ stub executable, not the game.
 ### The launcher
 
 Or let the launcher do it. It is a small window: drop your disc image on it, and
-it checks the disc, lists the free tools the build needs (with the command that
-installs whichever are missing), copies the disc's files, translates and compiles
-the game, and starts it. Everything stays on your computer.
+it checks the disc, copies its files, translates and compiles the game on your
+computer, and starts it. Nothing from the game is downloaded or shared.
+
+Its release download carries everything the build needs (the source, CMake, Ninja,
+Python, SDL3, FFmpeg and the libraries the build would fetch) except a C++
+compiler, which no release may include. If yours is missing, the launcher
+installs it through your system: Apple's Command Line Tools on macOS, Visual
+Studio Build Tools on Windows, your distribution's packages on Linux. The first
+build takes about an hour.
+
+From a checkout instead, it uses the tools on your machine, and can install what
+is missing:
 
 ```sh
 cmake -S tools/launcher -B build/launcher -G Ninja
@@ -46,6 +55,8 @@ cmake --build build/launcher
 Then open `build/launcher/DQ8Recomp Launcher.app` on macOS, or run
 `build/launcher/dq8-launcher` on Linux and Windows. `dq8-launcher --build --disc
 <image.iso>` runs the same build without the window.
+`python3 tools/launcher/payload.py --out build/payload` assembles a release's
+payload, as the Release workflow does for each platform.
 
 ## Contributing
 
