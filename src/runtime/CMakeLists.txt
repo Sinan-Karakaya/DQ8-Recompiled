@@ -12,7 +12,7 @@ option(DQ8_LINK_OVERLAYS
     OFF)
 
 if(DQ8_LINK_GENERATED)
-    target_sources(dq8 PRIVATE vu_bounds.cpp)
+    target_sources(dq8 PRIVATE screen_size.cpp vu_bounds.cpp)
     if(NOT TARGET ps2_runtime)
         message(FATAL_ERROR
             "DQ8_LINK_GENERATED=ON but the ps2_runtime target does not exist. "
@@ -68,7 +68,8 @@ if(DQ8_LINK_GENERATED)
     # The hardware GS backend, when SDL3 was found. Selected at runtime with
     # --gs=sdlgpu; without it dq8 still runs on the software rasteriser.
     if(TARGET dq8_gfx_sdlgpu)
-        target_link_libraries(dq8 PRIVATE dq8_gfx_sdlgpu)
+        # The in-game menu (F1) draws over the same window.
+        target_link_libraries(dq8 PRIVATE dq8_gfx_sdlgpu dq8_ui)
         target_compile_definitions(dq8 PRIVATE DQ8_HAS_SDLGPU=1)
         message(STATUS "dq8: SDL GPU backend available (--gs=sdlgpu)")
     else()

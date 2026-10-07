@@ -108,3 +108,5 @@ if(DQ8_GFX_SDL_TARGET)
 elseif(DQ8_GFX_ENABLE_SDLGPU)
     message(STATUS "dq8 gfx: SDL3 >= 3.2 not found -- hardware backend disabled")
 endif()
+# The menu (src/ui) links the same SDL.
+set(DQ8_GFX_SDL_TARGET "${DQ8_GFX_SDL_TARGET}" PARENT_SCOPE)

@@ -21,6 +21,7 @@
 #include <cstring>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -474,6 +475,34 @@ struct SdlGpuBackend::Impl {
     uint32_t presentSourceHeight = 0u;
     bool windowCloseRequested = false;
     SdlPadInput pad;
+
+    // Window-thread state: the overlay, how the picture is fitted, and the
+    // textures the fitting and captures need.
+    SdlGpuOverlay *overlay = nullptr;
+    bool overlayCaptured = false;
+    SdlGpuDisplayOptions displayOptions{};
+    SDL_GPUPresentMode appliedPresentMode = SDL_GPU_PRESENTMODE_VSYNC;
+    SdlGpuBackend::GameWidescreenQuery widescreenQuery = nullptr;
+    size_t lastDisplayedSlot = SIZE_MAX;
+    // Anything shown, and the last frame the game itself presented.
+    std::chrono::steady_clock::time_point lastShown{};
+    std::chrono::steady_clock::time_point lastGameFrame{};
+    SdlGpuRect lastRect{};
+    struct ScratchTexture {
+        SDL_GPUTexture *texture = nullptr;
+        uint32_t width = 0u, height = 0u;
+        SDL_GPUTextureFormat format = SDL_GPU_TEXTUREFORMAT_INVALID;
+    };
+    ScratchTexture sharpTexture, compositeTexture, captureTexture;
+    struct CaptureRequest {
+        bool withOverlay = false;
+        SdlGpuCaptureCallback done;
+    };
+    std::vector<CaptureRequest> captureRequests;
+    std::string lastWindowError;
+    std::atomic<uint32_t> requestedScale{0u};
+    std::atomic<uint32_t> activeScale{1u};
+
     uint64_t previousPresentDraws = 0u;
     uint64_t previousPresentTransfers = 0u;
     uint64_t titlePresents = 0u;
@@ -1894,29 +1923,134 @@ struct SdlGpuBackend::Impl {
         return true;
     }
 
-    // Scales the present source into the swapchain, letterboxed to preserve
-    // aspect and snapped to an integer multiple when upscaling -- a fractional
-    // nearest-neighbour scale duplicates some pixel columns and not others,
-    // which shreds one-pixel font stems.
+    bool ensureScratch(ScratchTexture &scratch, uint32_t width, uint32_t height,
+                       SDL_GPUTextureFormat format) {
+        if (scratch.texture && scratch.width == width && scratch.height == height &&
+            scratch.format == format)
+            return true;
+        releaseScratch(scratch);
+        SDL_GPUTextureCreateInfo info{};
+        info.type = SDL_GPU_TEXTURETYPE_2D;
+        info.format = format;
+        info.width = width;
+        info.height = height;
+        info.layer_count_or_depth = 1u;
+        info.num_levels = 1u;
+        info.sample_count = SDL_GPU_SAMPLECOUNT_1;
+        info.usage = SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | SDL_GPU_TEXTUREUSAGE_SAMPLER;
+        scratch.texture = SDL_CreateGPUTexture(device.handle(), &info);
+        if (!scratch.texture)
+            return false;
+        scratch.width = width;
+        scratch.height = height;
+        scratch.format = format;
+        return true;
+    }
+
+    void releaseScratch(ScratchTexture &scratch) {
+        if (scratch.texture)
+            SDL_ReleaseGPUTexture(device.handle(), scratch.texture);
+        scratch = {};
+    }
+
+    static void blitRegion(SDL_GPUCommandBuffer *commands, SDL_GPUTexture *source, SdlGpuRect from,
+                           SDL_GPUTexture *destination, SdlGpuRect to, SDL_GPUFilter filter,
+                           SDL_GPULoadOp loadOp) {
+        SDL_GPUBlitInfo blit{};
+        blit.source.texture = source;
+        blit.source.x = from.x;
+        blit.source.y = from.y;
+        blit.source.w = from.width;
+        blit.source.h = from.height;
+        blit.destination.texture = destination;
+        blit.destination.x = to.x;
+        blit.destination.y = to.y;
+        blit.destination.w = to.width;
+        blit.destination.h = to.height;
+        blit.load_op = loadOp;
+        blit.clear_color = SDL_FColor{0.0f, 0.0f, 0.0f, 1.0f};
+        blit.filter = filter;
+        SDL_BlitGPUTexture(commands, &blit);
+    }
+
+    // The game picture into `target` at `rect`. CLEAR, not LOAD: the bars
+    // around it have to be painted, and swapchain images are recycled.
+    void drawPicture(SDL_GPUCommandBuffer *commands, const PresentationSlot &slot,
+                     SDL_GPUTexture *target, SdlGpuRect rect) {
+        SDL_GPUTexture *source = slot.texture;
+        uint32_t width = slot.width;
+        uint32_t height = slot.height;
+        SDL_GPUFilter filter = SDL_GPU_FILTER_LINEAR;
+        if (displayOptions.filter == SdlGpuFilter::Nearest) {
+            filter = SDL_GPU_FILTER_NEAREST;
+        } else if (displayOptions.filter == SdlGpuFilter::Sharp) {
+            if (rect.width % width == 0u && rect.height % height == 0u) {
+                filter = SDL_GPU_FILTER_NEAREST;
+            } else if (rect.width > width || rect.height > height) {
+                // A fractional nearest scale duplicates some columns and not
+                // others, which shreds one-pixel font stems. Nearest to the
+                // whole multiple above the output, then bilinear down to it.
+                constexpr uint32_t kLimit = 8192u;
+                const uint32_t factor = static_cast<uint32_t>(std::ceil(
+                    std::max(double(rect.width) / width, double(rect.height) / height)));
+                if (width * factor <= kLimit && height * factor <= kLimit &&
+                    ensureScratch(sharpTexture, width * factor, height * factor,
+                                  SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM)) {
+                    blitRegion(commands, source, {0u, 0u, width, height}, sharpTexture.texture,
+                               {0u, 0u, width * factor, height * factor}, SDL_GPU_FILTER_NEAREST,
+                               SDL_GPU_LOADOP_DONT_CARE);
+                    source = sharpTexture.texture;
+                    width *= factor;
+                    height *= factor;
+                }
+            }
+        }
+        blitRegion(commands, source, {0u, 0u, width, height}, target, rect, filter,
+                   SDL_GPU_LOADOP_CLEAR);
+    }
+
+    void clearTarget(SDL_GPUCommandBuffer *commands, SDL_GPUTexture *target) {
+        SDL_GPUColorTargetInfo info{};
+        info.texture = target;
+        info.load_op = SDL_GPU_LOADOP_CLEAR;
+        info.store_op = SDL_GPU_STOREOP_STORE;
+        info.clear_color = SDL_FColor{0.0f, 0.0f, 0.0f, 1.0f};
+        if (SDL_GPURenderPass *pass = SDL_BeginGPURenderPass(commands, &info, 1u, nullptr))
+            SDL_EndGPURenderPass(pass);
+    }
+
+    int gameWidescreen() const { return widescreenQuery ? widescreenQuery() : -1; }
+
+    void applyPresentMode() {
+        if (displayOptions.presentMode == appliedPresentMode)
+            return;
+        SDL_GPUPresentMode mode = displayOptions.presentMode;
+        if (!SDL_WindowSupportsGPUPresentMode(device.handle(), window, mode))
+            mode = SDL_GPU_PRESENTMODE_VSYNC;
+        if (SDL_SetGPUSwapchainParameters(device.handle(), window, SDL_GPU_SWAPCHAINCOMPOSITION_SDR, mode))
+            appliedPresentMode = displayOptions.presentMode;
+    }
+
+    // Fits a frame into the window, draws the overlay over it, and serves any
+    // pending capture. A null slot shows the overlay over black.
     //
     // Called with the backend lock released: acquiring a swapchain texture
     // waits for the display, and holding the lock across that wait blocks
     // every Submit and transfer the EE thread makes for the whole frame.
-    bool showPresentSource(PresentationSlot &slot, std::string &error) {
-        if (!window || !slot.texture)
+    bool showInWindow(PresentationSlot *slot, std::string &error) {
+        if (!window || (slot && !slot->texture))
             return true;
-        const uint32_t sourceWidth = slot.width;
-        const uint32_t sourceHeight = slot.height;
         const auto fail = [&](const char *context) {
             error = std::string(context) + SDL_GetError();
             return false;
         };
-        if (slot.displayed) {
-            if (!SDL_WaitForGPUFences(device.handle(), true, &slot.displayed, 1))
+        if (slot && slot->displayed) {
+            if (!SDL_WaitForGPUFences(device.handle(), true, &slot->displayed, 1))
                 return fail("SDL_WaitForGPUFences(previous display): ");
-            SDL_ReleaseGPUFence(device.handle(), slot.displayed);
-            slot.displayed = nullptr;
+            SDL_ReleaseGPUFence(device.handle(), slot->displayed);
+            slot->displayed = nullptr;
         }
+        applyPresentMode();
 
         SDL_GPUCommandBuffer *commands = SDL_AcquireGPUCommandBuffer(device.handle());
         if (!commands)
@@ -1930,43 +2064,133 @@ struct SdlGpuBackend::Impl {
             SDL_CancelGPUCommandBuffer(commands);
             return fail("SDL_WaitAndAcquireGPUSwapchainTexture: ");
         }
+        // Also when minimised, so an idle overlay does not retry every pump.
+        lastShown = std::chrono::steady_clock::now();
         if (!swapchain || swapchainWidth == 0u || swapchainHeight == 0u) {
             // Minimised or otherwise unavailable this frame; nothing to show.
             if (!SDL_SubmitGPUCommandBuffer(commands))
                 return fail("SDL_SubmitGPUCommandBuffer(minimized): ");
             return true;
         }
+        const SdlGpuRect whole{0u, 0u, swapchainWidth, swapchainHeight};
 
-        SDL_GPUTexture *source = slot.texture;
-        const float fitScale = std::min(static_cast<float>(swapchainWidth) / static_cast<float>(sourceWidth),
-                                        static_cast<float>(swapchainHeight) / static_cast<float>(sourceHeight));
-        const float scaleFactor = fitScale >= 1.0f ? std::floor(fitScale) : fitScale;
-        const uint32_t targetWidth =
-            std::max<uint32_t>(1u, static_cast<uint32_t>(static_cast<float>(sourceWidth) * scaleFactor));
-        const uint32_t targetHeight =
-            std::max<uint32_t>(1u, static_cast<uint32_t>(static_cast<float>(sourceHeight) * scaleFactor));
+        // A capture composes off screen first, since a swapchain image cannot
+        // be read back.
+        SDL_GPUTexture *target = swapchain;
+        std::optional<CaptureRequest> capture;
+        if (!captureRequests.empty() &&
+            ensureScratch(compositeTexture, swapchainWidth, swapchainHeight,
+                          SDL_GetGPUSwapchainTextureFormat(device.handle(), window))) {
+            capture = std::move(captureRequests.front());
+            captureRequests.erase(captureRequests.begin());
+            target = compositeTexture.texture;
+        }
 
-        SDL_GPUBlitInfo blit{};
-        blit.source.texture = source;
-        blit.source.w = sourceWidth;
-        blit.source.h = sourceHeight;
-        blit.destination.texture = swapchain;
-        blit.destination.x = (swapchainWidth - targetWidth) / 2u;
-        blit.destination.y = (swapchainHeight - targetHeight) / 2u;
-        blit.destination.w = targetWidth;
-        blit.destination.h = targetHeight;
-        // CLEAR, not LOAD: the letterbox bars have to be painted, and the
-        // swapchain image is recycled.
-        blit.load_op = SDL_GPU_LOADOP_CLEAR;
-        blit.clear_color = SDL_FColor{0.0f, 0.0f, 0.0f, 1.0f};
-        blit.filter = scaleFactor >= 1.0f ? SDL_GPU_FILTER_NEAREST : SDL_GPU_FILTER_LINEAR;
-        SDL_BlitGPUTexture(commands, &blit);
+        SdlGpuRect rect{};
+        if (slot) {
+            rect = sdlGpuDisplayRect(displayOptions, slot->width, slot->height, swapchainWidth,
+                                     swapchainHeight, gameWidescreen());
+            drawPicture(commands, *slot, target, rect);
+        } else {
+            clearTarget(commands, target);
+        }
+        lastRect = rect;
+
+        SdlGpuRect captured{};
+        const auto copyOut = [&](SdlGpuRect from) {
+            if (from.width != 0u && ensureScratch(captureTexture, from.width, from.height,
+                                                  SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM)) {
+                captured = {0u, 0u, from.width, from.height};
+                blitRegion(commands, target, from, captureTexture.texture, captured,
+                           SDL_GPU_FILTER_NEAREST, SDL_GPU_LOADOP_DONT_CARE);
+            }
+        };
+        if (capture && !capture->withOverlay)
+            copyOut(rect);
+        if (overlay)
+            overlay->render(commands, target, swapchainWidth, swapchainHeight);
+        if (capture && capture->withOverlay)
+            copyOut(whole);
+        if (target != swapchain)
+            blitRegion(commands, target, whole, swapchain, whole, SDL_GPU_FILTER_NEAREST,
+                       SDL_GPU_LOADOP_DONT_CARE);
 
         SDL_GPUFence *displayed = SDL_SubmitGPUCommandBufferAndAcquireFence(commands);
         if (!displayed)
             return fail("SDL_SubmitGPUCommandBufferAndAcquireFence(present): ");
-        slot.displayed = displayed;
+        if (slot)
+            slot->displayed = displayed;
+        else
+            SDL_ReleaseGPUFence(device.handle(), displayed);
+
+        if (capture) {
+            SdlGpuCapture result;
+            std::string captureError;
+            if (captured.width != 0u &&
+                device.downloadTexture(captureTexture.texture, captured.width, captured.height,
+                                       result.rgba, captureError)) {
+                result.width = captured.width;
+                result.height = captured.height;
+            } else {
+                std::fprintf(stderr, "[gfx] capture failed: %s\n",
+                             captureError.empty() ? "nothing on screen" : captureError.c_str());
+                result.rgba.clear();
+            }
+            if (capture->done)
+                capture->done(std::move(result));
+        }
         return true;
+    }
+
+    // Shows the last frame again under a fresh overlay, while the game shows
+    // none: paused, loading, or not started yet.
+    void refreshWindow() {
+        PresentationSlot *slot = nullptr;
+        {
+            std::lock_guard lock(presentationPool->mutex);
+            if (presentationPool->closing)
+                return;
+            if (lastDisplayedSlot < presentationPool->slots.size()) {
+                PresentationSlot &candidate = presentationPool->slots[lastDisplayedSlot];
+                // Leased means a new frame is on its way into it.
+                if (candidate.leased)
+                    return;
+                if (candidate.texture) {
+                    candidate.leased = true;
+                    slot = &candidate;
+                }
+            }
+        }
+        std::string error;
+        const bool shown = showInWindow(slot, error);
+        if (slot) {
+            std::lock_guard lock(presentationPool->mutex);
+            slot->leased = false;
+            presentationPool->available.notify_one();
+        }
+        if (!shown && error != lastWindowError)
+            std::fprintf(stderr, "[gfx] window refresh: %s\n", error.c_str());
+        lastWindowError = shown ? std::string() : error;
+    }
+
+    // Applied at the start of a presentation, an ordered point in the GS
+    // command stream, so no draw of the frame in progress sees half a change.
+    // Depth is never read back, so depth targets start clean at the new size.
+    void applyRequestedScale() {
+        const uint32_t requested = requestedScale.exchange(0u, std::memory_order_acq_rel);
+        if (requested == 0u || !targets || requested == scale)
+            return;
+        if (!flushDraws())
+            return;
+        std::string error;
+        if (!targets->resolveAll(error)) {
+            std::fprintf(stderr, "[gfx] internal resolution stays %ux: %s\n", scale, error.c_str());
+            return;
+        }
+        targets->setScale(requested);
+        scale = targets->scale();
+        activeScale.store(scale, std::memory_order_release);
+        std::fprintf(stderr, "[gfx] internal resolution %ux\n", scale);
     }
 
     // Uploads a CPU-composed frame into the present source. Only used when the
@@ -2385,9 +2609,25 @@ struct SdlGpuBackend::Impl {
             if (event.type == SDL_EVENT_QUIT ||
                 event.type == SDL_EVENT_WINDOW_CLOSE_REQUESTED)
                 windowCloseRequested = true;
-            pad.handleEvent(event);
+            if (overlay && overlay->handleEvent(event))
+                continue;
+            // Hotplug always reaches the pad; input only while the game has it.
+            const bool hotplug = event.type == SDL_EVENT_GAMEPAD_ADDED ||
+                                 event.type == SDL_EVENT_GAMEPAD_REMOVED;
+            if (hotplug || !overlay || !overlay->capturesInput())
+                pad.handleEvent(event);
         }
-        pad.poll(SDL_GetKeyboardState(nullptr), SDL_GetKeyboardFocus() == window);
+        const bool captured = overlay && overlay->capturesInput();
+        if (overlayCaptured && !captured)
+            pad.suppressHeld();
+        overlayCaptured = captured;
+        pad.poll(SDL_GetKeyboardState(nullptr), SDL_GetKeyboardFocus() == window && !captured);
+        // Only once the game has stopped presenting: between its own frames a
+        // refresh would double the presents and could hold the next one up.
+        const auto now = std::chrono::steady_clock::now();
+        if (overlay && overlay->wantsFrames() && now - lastGameFrame >= std::chrono::milliseconds(50) &&
+            now - lastShown >= std::chrono::milliseconds(15))
+            refreshWindow();
         return !windowCloseRequested;
     }
 
@@ -2435,6 +2675,8 @@ SdlGpuBackend::~SdlGpuBackend() {
             SDL_ReleaseGPUTexture(m_impl->device.handle(), feedback.texture);
         if (m_impl->presentUpload)
             SDL_ReleaseGPUTexture(m_impl->device.handle(), m_impl->presentUpload);
+        for (auto *scratch : {&m_impl->sharpTexture, &m_impl->compositeTexture, &m_impl->captureTexture})
+            m_impl->releaseScratch(*scratch);
         if (m_impl->window) {
             SDL_ReleaseWindowFromGPUDevice(m_impl->device.handle(), m_impl->window);
             SDL_DestroyWindow(m_impl->window);
@@ -2592,6 +2834,7 @@ GSPresentationTicket SdlGpuBackend::PreparePresentation(const GSPresentationRequ
         m_impl->presentSourceHeight = slot.height;
         m_impl->reportStats();
         m_impl->lastError.clear();
+        m_impl->applyRequestedScale();
         m_impl->acquirePresentation(request, stage);
         m_impl->finishPresentation(stage);
         if (!m_impl->lastError.empty())
@@ -2619,8 +2862,10 @@ PresentationFrame SdlGpuBackend::DisplayPreparedPresentation(const GSPresentatio
         if (slot.prepared && !SDL_WaitForGPUFences(m_impl->device.handle(), true, &slot.prepared, 1))
             throw std::runtime_error(std::string("SDL_WaitForGPUFences(snapshot): ") + SDL_GetError());
         std::string error;
-        if (!m_impl->showPresentSource(slot, error))
+        if (!m_impl->showInWindow(&slot, error))
             throw std::runtime_error(error);
+        m_impl->lastDisplayedSlot = prepared->slot;
+        m_impl->lastGameFrame = m_impl->lastShown;
         m_impl->updatePerformanceTitle(prepared->gsActive);
     }
     PresentationFrame frame = prepared->frame;
@@ -2719,11 +2964,71 @@ void SdlGpuBackend::setResolutionScale(uint32_t scale) {
     } else {
         m_impl->scale = std::clamp<uint32_t>(scale, 1u, 8u);
     }
+    m_impl->activeScale.store(m_impl->scale, std::memory_order_release);
 }
 
 uint32_t SdlGpuBackend::resolutionScale() const {
     std::lock_guard lock(m_impl->mutex);
     return m_impl->scale;
+}
+
+void SdlGpuBackend::requestResolutionScale(uint32_t scale) {
+    m_impl->requestedScale.store(std::clamp<uint32_t>(scale, 1u, 8u), std::memory_order_release);
+}
+
+uint32_t SdlGpuBackend::activeResolutionScale() const {
+    return m_impl->activeScale.load(std::memory_order_acquire);
+}
+
+void SdlGpuBackend::setGameWidescreenQuery(GameWidescreenQuery query) {
+    m_impl->widescreenQuery = query;
+}
+
+int SdlGpuBackend::gameWidescreen() const {
+    return m_impl->gameWidescreen();
+}
+
+void SdlGpuBackend::setOverlay(SdlGpuOverlay *overlay) {
+    m_impl->overlay = overlay;
+    m_impl->overlayCaptured = false;
+}
+
+void SdlGpuBackend::setDisplayOptions(const SdlGpuDisplayOptions &options) {
+    m_impl->displayOptions = options;
+}
+
+const SdlGpuDisplayOptions &SdlGpuBackend::displayOptions() const {
+    return m_impl->displayOptions;
+}
+
+bool SdlGpuBackend::supportsPresentMode(SDL_GPUPresentMode mode) const {
+    return m_impl->window &&
+           SDL_WindowSupportsGPUPresentMode(m_impl->device.handle(), m_impl->window, mode);
+}
+
+SDL_Window *SdlGpuBackend::window() const {
+    return m_impl->window;
+}
+
+SDL_GPUDevice *SdlGpuBackend::gpuDevice() const {
+    return m_impl->device.handle();
+}
+
+SDL_GPUTextureFormat SdlGpuBackend::windowTextureFormat() const {
+    return m_impl->window ? SDL_GetGPUSwapchainTextureFormat(m_impl->device.handle(), m_impl->window)
+                          : SDL_GPU_TEXTUREFORMAT_INVALID;
+}
+
+SdlPadInput &SdlGpuBackend::padInput() {
+    return m_impl->pad;
+}
+
+SdlGpuRect SdlGpuBackend::displayRect() const {
+    return m_impl->lastRect;
+}
+
+void SdlGpuBackend::requestCapture(bool withOverlay, SdlGpuCaptureCallback done) {
+    m_impl->captureRequests.push_back({withOverlay, std::move(done)});
 }
 
 bool SdlGpuBackend::openWindow(const char *title, uint32_t width, uint32_t height,
@@ -2736,8 +3041,10 @@ bool SdlGpuBackend::openWindow(const char *title, uint32_t width, uint32_t heigh
     if (m_impl->window != nullptr)
         return true;
 
-    m_impl->window = SDL_CreateWindow(title, static_cast<int>(width),
-                                      static_cast<int>(height), SDL_WINDOW_RESIZABLE);
+    // High pixel density: on a Retina display the swapchain is then the
+    // panel's own size, not a quarter of it scaled up by the compositor.
+    m_impl->window = SDL_CreateWindow(title, static_cast<int>(width), static_cast<int>(height),
+                                      SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (!m_impl->window) {
         error = std::string("SDL_CreateWindow: ") + SDL_GetError();
         return false;
@@ -2761,15 +3068,15 @@ bool SdlGpuBackend::hasWindow() const {
     return m_impl->window != nullptr;
 }
 
+// Window thread only, like everything the window and pad touch, so neither
+// takes the backend lock: the overlay calls back into the backend from here.
 bool SdlGpuBackend::pumpEvents() {
-    std::lock_guard lock(m_impl->mutex);
     if (!m_impl->window)
         return true;
     return m_impl->pumpEvents();
 }
 
 void SdlGpuBackend::hostPadState(uint32_t &held, uint32_t &pressed, uint32_t &sticks) const {
-    std::lock_guard lock(m_impl->mutex);
     m_impl->pad.read(held, pressed, sticks);
 }
 

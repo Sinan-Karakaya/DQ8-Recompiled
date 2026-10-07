@@ -35,8 +35,10 @@ if(PkgConfig_FOUND)
     pkg_check_modules(LZMA IMPORTED_TARGET liblzma)
 endif()
 
-# The renderer itself: dq8_gfx_gs always, dq8_gfx_sdlgpu when SDL3 is present.
+# The renderer itself: dq8_gfx_gs always, dq8_gfx_sdlgpu when SDL3 is present,
+# and the in-game menu over it.
 add_subdirectory("${DQ8_ROOT}/src/gfx" "${CMAKE_CURRENT_BINARY_DIR}/gfx")
+add_subdirectory("${DQ8_ROOT}/src/ui" "${CMAKE_CURRENT_BINARY_DIR}/ui")
 
 add_executable(dq8-gsreplay
     main.cpp
@@ -154,6 +156,30 @@ if(TARGET dq8_gfx_sdlgpu)
     if(NOT APPLE)
         set_tests_properties(sdlgpu-raster movie-upload PROPERTIES
             ENVIRONMENT "SDL_VIDEODRIVER=offscreen")
+    endif()
+endif()
+
+if(TARGET dq8_ui)
+    add_executable(dq8-ui-tests ui_tests.cpp)
+    target_link_libraries(dq8-ui-tests PRIVATE dq8_ui)
+    add_test(NAME ui COMMAND dq8-ui-tests)
+    # The menu drawn off screen over a painted backdrop: every view in CI,
+    # and PNGs of them with --out.
+    add_executable(dq8-ui-preview
+        ui_preview.cpp
+        guest_stubs.cpp
+        "${PS2X_RUNTIME}/src/lib/gs/gs_cpu_backend.cpp"
+        "${PS2X_RUNTIME}/src/lib/gs/gs_frontend.cpp"
+    )
+    target_include_directories(dq8-ui-preview SYSTEM PRIVATE
+        "${PS2X_RUNTIME}/include"
+        "${PS2X_RUNTIME}/include/runtime"
+    )
+    target_link_libraries(dq8-ui-preview PRIVATE dq8_ui dq8_gfx_gs Threads::Threads)
+    add_test(NAME ui-preview COMMAND dq8-ui-preview --smoke)
+    set_tests_properties(ui-preview PROPERTIES SKIP_RETURN_CODE 77)
+    if(NOT APPLE)
+        set_tests_properties(ui-preview PROPERTIES ENVIRONMENT "SDL_VIDEODRIVER=offscreen")
     endif()
 endif()
 
