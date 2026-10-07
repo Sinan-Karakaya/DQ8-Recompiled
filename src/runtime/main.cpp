@@ -275,15 +275,13 @@ int main(int argc, char **argv)
                             : "presenting through the runtime");
             std::unique_ptr<GSRasterBackend> backend = std::move(sdlBackend);
             if (const char *worker = std::getenv("DQ8_GS_WORKER"); !worker || std::string(worker) != "0") {
-                // 32 MiB of queued GS work, about two frames of DQ8's
-                // heaviest scenes: the worker stalls on GPU readbacks in
-                // bursts, and a 4 MiB queue then stopped VU1 too (the 3x
-                // King Trode dialogue: 20 -> 23.5 FPS). DQ8_GS_QUEUE_MB
-                // overrides it.
+                // 4 MiB of queued GS work. A deeper queue lets the GPU fall a
+                // quarter second behind in heavy scenes, and the window then
+                // shows a third of the frames. DQ8_GS_QUEUE_MB overrides it.
                 backend = std::make_unique<GSThreadedBackend>(std::move(backend), [] {
                     const char *mib = std::getenv("DQ8_GS_QUEUE_MB");
                     const long value = mib ? std::atol(mib) : 0;
-                    return static_cast<size_t>(value > 0 ? value : 32) * 1024u * 1024u;
+                    return static_cast<size_t>(value > 0 ? value : 4) * 1024u * 1024u;
                 }());
                 std::printf("[dq8] ordered GS worker enabled\n");
             }
