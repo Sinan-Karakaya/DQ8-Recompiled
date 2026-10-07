@@ -79,7 +79,9 @@ private:
     void run(PipelineOptions options, ChildEnvironment environment);
     bool runStage(Stage stage, const std::function<bool()> &body);
     // Runs args for `stage`; with a plan, progress counts each step's cost.
-    bool command(Stage stage, const std::vector<std::string> &args, const CompilePlan *plan = nullptr);
+    // `watch` sees every line of output.
+    bool command(Stage stage, const std::vector<std::string> &args, const CompilePlan *plan = nullptr,
+                 const std::function<void(const std::string &)> &watch = {});
     void set(Stage stage, double progress, const std::string &detail);
     void line(const std::string &text);
 
@@ -100,5 +102,9 @@ bool parseNinjaProgress(const std::string &line, uint64_t &done, uint64_t &total
 std::filesystem::path recompilerPath(const std::filesystem::path &repo);
 std::filesystem::path gamePath(const std::filesystem::path &repo);
 std::filesystem::path extractedDisc(const std::filesystem::path &workspace);
+
+// True when the launcher's last build for this workspace succeeded and what
+// Play needs is still there; a stub or a hand-made build does not count.
+bool launcherBuilt(const std::filesystem::path &repo, const std::filesystem::path &workspace);
 
 } // namespace dq8::launcher

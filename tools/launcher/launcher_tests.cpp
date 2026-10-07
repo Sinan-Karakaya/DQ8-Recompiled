@@ -210,6 +210,24 @@ void compileCosts() {
     std::filesystem::remove_all(generated, ec);
 }
 
+// Play is offered only for the launcher's own finished build of this workspace.
+void builtMarker() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "dq8-launcher-built";
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    const std::filesystem::path repo = root / "repo", workspace = root / "games";
+    std::filesystem::create_directories(gamePath(repo).parent_path(), ec);
+    std::filesystem::create_directories(extractedDisc(workspace), ec);
+    std::ofstream(gamePath(repo)) << "game";
+    require(!launcherBuilt(repo, workspace), "a game built by hand does not count");
+    std::ofstream(repo / "build" / "game" / "launcher-built.txt") << pathUtf8(workspace) << "\n";
+    require(!launcherBuilt(repo, workspace), "nor does one whose game files are missing");
+    std::ofstream(extractedDisc(workspace) / "SLUS_212.07") << "elf";
+    require(launcherBuilt(repo, workspace), "the launcher's build with its files");
+    require(!launcherBuilt(repo, root / "elsewhere"), "but not for another workspace");
+    std::filesystem::remove_all(root, ec);
+}
+
 void childProcess() {
 #if !defined(_WIN32)
     std::vector<std::string> lines;
@@ -241,6 +259,7 @@ int main() try {
     jsonReader();
     progressAndVersions();
     compileCosts();
+    builtMarker();
     childProcess();
     std::puts("PASS: launcher hashing, ISO reader, JSON, progress, compile costs, versions and child processes");
     return 0;

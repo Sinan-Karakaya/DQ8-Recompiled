@@ -100,15 +100,6 @@ bool diagnostic(const std::string &text) {
     return false;
 }
 
-// A note that this exact image was checked, so a second run skips the hash.
-std::string discStamp(const std::filesystem::path &disc) {
-    std::error_code ec;
-    const auto size = std::filesystem::file_size(disc, ec);
-    // The file clock counts in 128 bits on some libraries; a stamp needs 64.
-    const auto time = static_cast<long long>(std::filesystem::last_write_time(disc, ec).time_since_epoch().count());
-    return pathUtf8(disc) + "\n" + std::to_string(size) + "\n" + std::to_string(time) + "\n";
-}
-
 // What translating reads. When none of it changed the corpus on disk is
 // current, and translating again would rewrite all 12k files, so ninja would
 // compile every one of them again.
@@ -184,6 +175,19 @@ std::filesystem::path gamePath(const std::filesystem::path &repo) {
 }
 
 std::filesystem::path extractedDisc(const std::filesystem::path &workspace) { return workspace / "Extracted_Usa"; }
+
+namespace {
+std::filesystem::path builtMarker(const std::filesystem::path &repo) {
+    return repo / "build" / "game" / "launcher-built.txt";
+}
+} // namespace
+
+bool launcherBuilt(const std::filesystem::path &repo, const std::filesystem::path &workspace) {
+    std::error_code ec;
+    return readText(builtMarker(repo)) == pathUtf8(workspace) + "\n" &&
+           std::filesystem::is_regular_file(gamePath(repo), ec) &&
+           std::filesystem::is_regular_file(extractedDisc(workspace) / kVersion, ec);
+}
 
 double compileCost(const std::string &file, uint64_t bytes) {
     // Tables such as register_functions.cpp are as large but quick.
@@ -351,7 +355,8 @@ bool Pipeline::runStage(Stage stage, const std::function<bool()> &body) {
     return ok;
 }
 
-bool Pipeline::command(Stage stage, const std::vector<std::string> &args, const CompilePlan *plan) {
+bool Pipeline::command(Stage stage, const std::vector<std::string> &args, const CompilePlan *plan,
+                       const std::function<void(const std::string &)> &watch) {
     std::string shown = "$";
     for (const std::string &arg : args)
         shown += " " + arg;
@@ -373,6 +378,8 @@ bool Pipeline::command(Stage stage, const std::vector<std::string> &args, const 
         run, m_environment,
         [&](const std::string &text) {
             line(text);
+            if (watch)
+                watch(text);
             if (text == "ninja: no work to do.")
                 upToDate = true;
             uint64_t done = 0u, total = 0u;
@@ -392,6 +399,8 @@ bool Pipeline::command(Stage stage, const std::vector<std::string> &args, const 
             lastTotal = total;
             size_t largeLeft = 0u;
             if (plan) {
+                // Into a pipe, ninja prints a step's line when it finishes (only
+                // a terminal gets it at the start too), so this step is done.
                 const size_t close = text.find("] ");
                 const auto it = close == std::string::npos ? plan->costs.end()
                                                            : plan->costs.find(text.substr(close + 2u));
@@ -439,6 +448,8 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
     m_logFile = options.workspace / "launcher.log";
     std::filesystem::remove(m_logFile, ec);
     const std::filesystem::path repo = options.repo;
+    // Play waits for this build; a failed one leaves nothing to start.
+    std::filesystem::remove(builtMarker(repo), ec);
     const std::filesystem::path extracted = extractedDisc(options.workspace);
     const std::string jobs = std::to_string(std::max(1, options.jobs));
     JsonValue hashes;
@@ -451,14 +462,9 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
     }
 
     const bool ok =
+        // Every build hashes the whole image again: metadata cannot prove the
+        // bytes are the ones checked last time, and it costs seconds.
         runStage(Stage::CheckDisc, [&] {
-            const std::filesystem::path stampPath = options.workspace / "disc-checked.txt";
-            if (readText(stampPath) == discStamp(options.disc)) {
-                std::lock_guard lock(m_mutex);
-                m_stages[0].status = StageState::Status::Skipped;
-                m_stages[0].detail = "Checked before";
-                return true;
-            }
             uint64_t checked = 0u;
             const std::string sha = hashFile(options.disc, [&](uint64_t done, uint64_t total) {
                 set(Stage::CheckDisc, total ? double(done) / double(total) : 0.0,
@@ -474,7 +480,6 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
                           "disc again and retry.";
                 return false;
             }
-            std::ofstream(stampPath, std::ios::trunc) << discStamp(options.disc);
             set(Stage::CheckDisc, 1.0, gigabytes(checked) + " checked");
             return true;
         }) &&
@@ -568,9 +573,28 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
             // The app bundle the build makes starts the game from these.
             args.push_back("-DDQ8_MACOS_ELF=" + pathUtf8(extracted / kVersion));
             args.push_back("-DDQ8_MACOS_ISO=" + pathUtf8(options.disc));
+#elif defined(_WIN32)
+            // Windows takes SDL3 and FFmpeg from vcpkg (wiki: Building).
+            if (const char *vcpkg = SDL_getenv("VCPKG_ROOT")) {
+                const std::filesystem::path toolchain =
+                    utf8Path(vcpkg) / "scripts" / "buildsystems" / "vcpkg.cmake";
+                std::error_code toolchainError;
+                if (std::filesystem::is_regular_file(toolchain, toolchainError))
+                    args.push_back("-DCMAKE_TOOLCHAIN_FILE=" + pathUtf8(toolchain));
+            }
 #endif
-            if (!command(Stage::ConfigureGame, args))
+            // Without SDL3 the game still builds, then cannot open its window.
+            bool sdlgpu = false;
+            if (!command(Stage::ConfigureGame, args, nullptr, [&](const std::string &text) {
+                    sdlgpu = sdlgpu || text.find("SDL3 GPU backend enabled") != std::string::npos;
+                }))
                 return false;
+            if (!sdlgpu) {
+                std::lock_guard lock(m_mutex);
+                m_error = "The game's build did not find SDL3 3.2 or newer, which it draws with. Install it "
+                          "(see Tools), then build again.";
+                return false;
+            }
             set(Stage::ConfigureGame, 1.0, "Ready");
             return true;
         }) &&
@@ -589,8 +613,11 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
                                plan.add(text.substr(close + 2u), repo / "build" / "generated");
                        },
                        m_cancel, planError);
-            return command(Stage::CompileGame, {"ninja", "-C", dir, "-j", jobs, "dq8"},
-                           plan.total > 0.0 ? &plan : nullptr);
+            if (!command(Stage::CompileGame, {"ninja", "-C", dir, "-j", jobs, "dq8"},
+                         plan.total > 0.0 ? &plan : nullptr))
+                return false;
+            std::ofstream(builtMarker(repo), std::ios::trunc) << pathUtf8(options.workspace) << "\n";
+            return true;
         });
     m_succeeded = ok;
     m_running = false;

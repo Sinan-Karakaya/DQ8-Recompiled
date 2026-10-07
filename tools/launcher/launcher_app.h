@@ -10,6 +10,7 @@
 
 #include <atomic>
 #include <filesystem>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -31,6 +32,14 @@ void saveConfig(const LauncherConfig &config);
 
 // Compile jobs the machine can take: one a core, within memory.
 int defaultJobs();
+
+// What the system's file pickers answered. They can answer on their own
+// thread, even after the window has closed, so each holds a share of this
+// rather than a pointer to the app.
+struct DialogPicks {
+    std::mutex mutex;
+    std::optional<std::string> disc, workspace;
+};
 
 // Fixed states for the screenshots, drawn with no live work behind them.
 enum class Preview : uint8_t {
@@ -105,9 +114,9 @@ private:
     // Play page.
     std::string m_launchError;
 
-    // Folder pickers answer on their own thread.
-    std::mutex m_dialogMutex;
-    std::optional<std::string> m_pickedDisc, m_pickedWorkspace;
+    std::shared_ptr<DialogPicks> m_picks = std::make_shared<DialogPicks>();
+    mutable bool m_built = false;
+    mutable double m_builtCheckedAt = -1.0;
 };
 
 } // namespace dq8::launcher

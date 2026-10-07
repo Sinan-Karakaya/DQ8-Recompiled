@@ -15,6 +15,7 @@
 #include <fstream>
 #include <sstream>
 #include <system_error>
+#include <utility>
 
 namespace dq8::launcher {
 using ui::em;
@@ -171,6 +172,26 @@ void dashedRect(ImDrawList *list, ImVec2 min, ImVec2 max, ImU32 tint, float dash
     edge(ImVec2(min.x, max.y), min);
 }
 
+constexpr SDL_DialogFileFilter kDiscFilters[] = {{"Disc images", "iso"}, {"All files", "*"}};
+
+// SDL's picker callbacks; userdata is a share of the app's DialogPicks, made
+// for this one answer.
+void SDLCALL onDiscPicked(void *userdata, const char *const *files, int) {
+    const std::unique_ptr<std::shared_ptr<DialogPicks>> picks(static_cast<std::shared_ptr<DialogPicks> *>(userdata));
+    if (!files || !files[0])
+        return;
+    std::lock_guard lock((*picks)->mutex);
+    (*picks)->disc = files[0];
+}
+
+void SDLCALL onWorkspacePicked(void *userdata, const char *const *folders, int) {
+    const std::unique_ptr<std::shared_ptr<DialogPicks>> picks(static_cast<std::shared_ptr<DialogPicks> *>(userdata));
+    if (!folders || !folders[0])
+        return;
+    std::lock_guard lock((*picks)->mutex);
+    (*picks)->workspace = folders[0];
+}
+
 std::string iniEscape(const std::string &text) {
     std::string out;
     for (const char c : text)
@@ -257,9 +278,8 @@ LauncherApp::LauncherApp(std::filesystem::path repo, SDL_Window *window, const L
     if (!m_config.disc.empty() && std::filesystem::is_regular_file(utf8Path(m_config.disc), ec))
         setDisc(m_config.disc);
     checkToolsAsync();
-    const bool built = std::filesystem::is_regular_file(gamePath(m_repo), ec);
     if (m_disc && m_disc->supported)
-        m_page = built ? Page::Play : Page::Tools;
+        m_page = launcherBuilt(m_repo, utf8Path(m_config.workspace)) ? Page::Play : Page::Tools;
 }
 
 LauncherApp::~LauncherApp() {
@@ -333,9 +353,14 @@ bool LauncherApp::pageDone(Page page) const {
     case Page::Build: {
         if (!m_live)
             return m_page == Page::Play;
-        std::error_code ec;
-        return !m_pipeline.running() &&
-               (m_pipeline.succeeded() || std::filesystem::is_regular_file(gamePath(m_repo), ec));
+        if (m_pipeline.running())
+            return false;
+        // Asked several times a frame; the files behind it change rarely.
+        if (m_time - m_builtCheckedAt > 0.5 || m_time < m_builtCheckedAt) {
+            m_built = launcherBuilt(m_repo, utf8Path(m_config.workspace));
+            m_builtCheckedAt = m_time;
+        }
+        return m_built;
     }
     case Page::Play:
     case Page::Count: break;
@@ -384,6 +409,11 @@ void LauncherApp::launchGame() {
         return;
     writeGameSettings();
     const std::filesystem::path workspace = utf8Path(m_config.workspace);
+    if (!launcherBuilt(m_repo, workspace)) {
+        m_launchError = "The game or its files are missing from " + pathUtf8(extractedDisc(workspace)) +
+                        ". Build again.";
+        return;
+    }
     const std::vector<std::string> args = {pathUtf8(gamePath(m_repo)),
                                            pathUtf8(extractedDisc(workspace) / kVersion),
                                            "--iso=" + m_config.disc, "--gs=sdlgpu"};
@@ -533,18 +563,18 @@ void LauncherApp::drawBackground() {
 
 void LauncherApp::draw() {
     m_time = ImGui::GetTime();
+    std::optional<std::string> pickedDisc, pickedWorkspace;
     {
-        std::lock_guard lock(m_dialogMutex);
-        if (m_pickedDisc) {
-            setDisc(*m_pickedDisc);
-            m_pickedDisc.reset();
-        }
-        if (m_pickedWorkspace) {
-            m_config.workspace = *m_pickedWorkspace;
-            m_pickedWorkspace.reset();
-            if (m_live && m_persist)
-                saveConfig(m_config);
-        }
+        std::lock_guard lock(m_picks->mutex);
+        pickedDisc = std::exchange(m_picks->disc, std::nullopt);
+        pickedWorkspace = std::exchange(m_picks->workspace, std::nullopt);
+    }
+    if (pickedDisc)
+        setDisc(*pickedDisc);
+    if (pickedWorkspace) {
+        m_config.workspace = *pickedWorkspace;
+        if (m_live && m_persist)
+            saveConfig(m_config);
     }
     // A finished build moves on to Play by itself.
     if (m_live && m_page == Page::Build && m_pipeline.succeeded() && !m_pipeline.running())
@@ -725,16 +755,8 @@ void LauncherApp::drawDiscPage() {
         list->AddText(ImVec2(center.x - alternativeSize.x * 0.5f, alternativeY), palette::kTextMuted, alternative);
         ImGui::SetCursorScreenPos(ImVec2(center.x - buttonWidth("Browse...") * 0.5f, buttonY));
         if (ui::iconButton("Browse...", Icon::Folder, !m_dragging)) {
-            static const SDL_DialogFileFilter filters[] = {{"Disc images", "iso"}, {"All files", "*"}};
-            SDL_ShowOpenFileDialog(
-                [](void *self, const char *const *files, int) {
-                    if (!files || !files[0])
-                        return;
-                    auto *app = static_cast<LauncherApp *>(self);
-                    std::lock_guard lock(app->m_dialogMutex);
-                    app->m_pickedDisc = files[0];
-                },
-                this, m_window, filters, 2, nullptr, false);
+            SDL_ShowOpenFileDialog(onDiscPicked, new std::shared_ptr<DialogPicks>(m_picks), m_window, kDiscFilters, 2,
+                                   nullptr, false);
         }
         ImGui::SetCursorScreenPos(ImVec2(min.x, max.y + em(0.8f)));
         // An item, so the zone counts toward the page's size.
@@ -772,18 +794,9 @@ void LauncherApp::drawDiscPage() {
     ImGui::TextColored(color(palette::kGood), "Recognised. Every byte is checked when the build starts.");
     ImGui::EndGroup();
     ImGui::SetCursorScreenPos(ImVec2(min.x, max.y + em(1.0f)));
-    if (ui::iconButton("Choose another disc...", Icon::Folder)) {
-        static const SDL_DialogFileFilter filters[] = {{"Disc images", "iso"}, {"All files", "*"}};
-        SDL_ShowOpenFileDialog(
-            [](void *self, const char *const *files, int) {
-                if (!files || !files[0])
-                    return;
-                auto *app = static_cast<LauncherApp *>(self);
-                std::lock_guard lock(app->m_dialogMutex);
-                app->m_pickedDisc = files[0];
-            },
-            this, m_window, filters, 2, nullptr, false);
-    }
+    if (ui::iconButton("Choose another disc...", Icon::Folder))
+        SDL_ShowOpenFileDialog(onDiscPicked, new std::shared_ptr<DialogPicks>(m_picks), m_window, kDiscFilters, 2,
+                               nullptr, false);
 }
 
 void LauncherApp::drawToolsPage() {
@@ -881,17 +894,9 @@ void LauncherApp::drawOptionsPage() {
         ImGui::TextUnformatted(pathUtf8(extractedDisc(utf8Path(m_config.workspace))).c_str());
         ImGui::PopTextWrapPos();
         ImGui::BeginDisabled(m_pipeline.running() || !m_live);
-        if (ui::iconButton("Change...", Icon::Folder)) {
-            SDL_ShowOpenFolderDialog(
-                [](void *self, const char *const *folders, int) {
-                    if (!folders || !folders[0])
-                        return;
-                    auto *app = static_cast<LauncherApp *>(self);
-                    std::lock_guard lock(app->m_dialogMutex);
-                    app->m_pickedWorkspace = folders[0];
-                },
-                this, m_window, m_config.workspace.c_str(), false);
-        }
+        if (ui::iconButton("Change...", Icon::Folder))
+            SDL_ShowOpenFolderDialog(onWorkspacePicked, new std::shared_ptr<DialogPicks>(m_picks), m_window,
+                                     m_config.workspace.c_str(), false);
         ImGui::EndDisabled();
         ui::endSettings();
     }
