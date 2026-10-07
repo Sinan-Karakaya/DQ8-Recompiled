@@ -17,6 +17,7 @@
 #include <imgui_impl_sdl3.h>
 #include <imgui_impl_sdlgpu3.h>
 
+#include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -107,8 +108,14 @@ const char *statusName(StageState::Status status) {
     return "";
 }
 
-// The window's build, without the window: progress goes to stdout.
+volatile std::sig_atomic_t g_interrupted = 0;
+void onInterrupt(int) { g_interrupted = 1; }
+
+// The window's build, without the window: progress goes to stdout. Ctrl+C or
+// SIGTERM cancel it like the window's button, so ninja does not outlive it.
 int headlessBuild(const std::filesystem::path &repo, const LauncherConfig &config) {
+    std::signal(SIGINT, onInterrupt);
+    std::signal(SIGTERM, onInterrupt);
     if (config.disc.empty()) {
         std::fprintf(stderr, "--build needs --disc\n");
         return 2;
@@ -125,6 +132,11 @@ int headlessBuild(const std::filesystem::path &repo, const LauncherConfig &confi
     Uint64 lastProgress = 0;
     do {
         SDL_Delay(500);
+        if (g_interrupted) {
+            g_interrupted = 0;
+            std::printf("[launcher] stopping\n");
+            pipeline.cancel();
+        }
         const auto stages = pipeline.stages();
         for (size_t i = 0; i < kStageCount; ++i) {
             const StageState &stage = stages[i];

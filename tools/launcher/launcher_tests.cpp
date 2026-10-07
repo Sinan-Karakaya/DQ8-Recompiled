@@ -192,22 +192,41 @@ void compileCosts() {
     require(compileCost("FUN_00389498_0x389498.cpp", 2'580'000u) >= kLargeCompileCost, "2.6 MB counts as large");
     require(compileCost("register_functions.cpp", 10'634'706u) == 1.0, "a table is quick whatever its size");
 
-    const std::filesystem::path generated = std::filesystem::temp_directory_path() / "dq8-launcher-plan";
+    const std::string object = "src/runtime/CMakeFiles/dq8_generated.dir/__/__/build/generated/SLUS_212.07/";
+    require(generatedKey("Building CXX object " + object + "FUN_1.cpp.o") == "SLUS_212.07/FUN_1.cpp",
+            "a ninja line names its translated file");
+    require(generatedKey("src\\runtime\\x.dir\\__\\build\\generated\\SLUS_212.07-overlays\\shop\\FUN_2.cpp.obj") ==
+                "SLUS_212.07-overlays/shop/FUN_2.cpp",
+            "backslashes and .obj too");
+    require(generatedKey("Linking CXX executable src/runtime/dq8").empty(), "other steps name none");
+
+    // A tree with one large file compiled before and one small one not yet.
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "dq8-launcher-plan";
+    const std::filesystem::path generated = root / "generated", build = root / "game";
     std::error_code ec;
-    std::filesystem::remove_all(generated, ec);
+    std::filesystem::remove_all(root, ec);
     std::filesystem::create_directories(generated / "SLUS_212.07", ec);
+    std::filesystem::create_directories(build / object, ec);
     std::ofstream(generated / "SLUS_212.07" / "FUN_00200000_0x200000.cpp") << std::string(3'000'000u, ' ');
+    std::ofstream(generated / "SLUS_212.07" / "FUN_00300000_0x300000.cpp") << "small";
+    std::ofstream(build / object / "FUN_00200000_0x200000.cpp.o") << "object";
+    std::filesystem::last_write_time(build / object / "FUN_00200000_0x200000.cpp.o",
+                                     std::filesystem::last_write_time(generated / "SLUS_212.07" /
+                                                                      "FUN_00200000_0x200000.cpp") +
+                                         std::chrono::seconds(5),
+                                     ec);
     CompilePlan plan;
-    plan.add("Building CXX object src/runtime/CMakeFiles/dq8_generated.dir/__/__/build/generated/SLUS_212.07/"
-             "FUN_00200000_0x200000.cpp.o",
-             generated);
-    plan.add("Building CXX object src\\runtime\\CMakeFiles\\dq8_generated.dir\\__\\__\\build\\generated\\"
-             "SLUS_212.07\\FUN_00200000_0x200000.cpp.obj",
-             generated);
-    plan.add("Linking CXX executable src/runtime/dq8", generated);
-    require(plan.large == 2u, "a large source is found from its object, either slash, .o or .obj");
-    require(plan.total > 2.0 * kLargeCompileCost && plan.costs.size() == 3u, "the plan adds every step up");
-    std::filesystem::remove_all(generated, ec);
+    plan.scan(generated, build);
+    require(plan.files.size() == 2u && plan.pending == 1u && plan.largeLeft == 0u,
+            "an object newer than its source counts as compiled");
+    require(plan.compiled > kLargeCompileCost && plan.total > plan.compiled, "costs add up by size");
+    require(plan.finish("Building CXX object " + object + "FUN_00300000_0x300000.cpp.o") && plan.pending == 0u &&
+                plan.compiled == plan.total,
+            "a finished line marks its file");
+    require(!plan.finish("Linking CXX executable src/runtime/dq8"), "a link is not a translated file");
+    plan.forgetCompiled();
+    require(plan.pending == 2u && plan.largeLeft == 1u && plan.compiled == 0.0, "and everything can start over");
+    std::filesystem::remove_all(root, ec);
 }
 
 // Play is offered only for the launcher's own finished build of this workspace.

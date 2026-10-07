@@ -252,9 +252,9 @@ void saveConfig(const LauncherConfig &config) {
 
 int defaultJobs() {
     const int cores = std::max(1, SDL_GetNumLogicalCPUCores());
-    // The largest translated functions peak near 0.6 GB in the compiler; allow
-    // 1.5 GB a job.
-    const int memory = std::max(1, SDL_GetSystemRAM() / 1536);
+    // Clang peaks at 1.5 GB on the largest translated function (measured over
+    // a full build), so allow 2 GB a job.
+    const int memory = std::max(1, SDL_GetSystemRAM() / 2048);
     return std::clamp(std::min(cores, memory), 1, cores);
 }
 

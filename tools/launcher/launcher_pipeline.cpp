@@ -89,12 +89,13 @@ std::string hashFile(const std::filesystem::path &path, const std::function<bool
 }
 
 // The recompiler reports ~32k unhandled instructions on a healthy run; they
-// belong in the log, not in the status line where they read as failure.
+// belong in the log, not in the status line where they read as failure, as
+// does ninja's own chatter.
 bool diagnostic(const std::string &text) {
     const size_t first = text.find_first_not_of(" \t");
     if (first == std::string::npos)
         return true;
-    for (const std::string_view prefix : {"[error]", "[warning]", "Unknown "})
+    for (const std::string_view prefix : {"[error]", "[warning]", "Unknown ", "ninja: "})
         if (std::string_view(text).substr(first).starts_with(prefix))
             return true;
     return false;
@@ -197,29 +198,81 @@ double compileCost(const std::string &file, uint64_t bytes) {
     return 1.0 + scaled * scaled * scaled;
 }
 
-void CompilePlan::add(const std::string &description, const std::filesystem::path &generated) {
-    double cost = 1.0;
-    std::string path = description;
+std::string generatedKey(std::string path) {
     std::replace(path.begin(), path.end(), '\\', '/');
     constexpr std::string_view kMarker = "build/generated/";
-    if (const size_t at = path.find(kMarker); at != std::string::npos) {
-        std::string relative = path.substr(at + kMarker.size());
-        for (const std::string_view suffix : {".obj", ".o"}) {
-            if (relative.size() > suffix.size() && relative.ends_with(suffix)) {
-                relative.resize(relative.size() - suffix.size());
-                break;
-            }
+    const size_t at = path.rfind(kMarker);
+    if (at == std::string::npos)
+        return {};
+    std::string key = path.substr(at + kMarker.size());
+    for (const std::string_view suffix : {".obj", ".o"}) {
+        if (key.size() > suffix.size() && key.ends_with(suffix)) {
+            key.resize(key.size() - suffix.size());
+            break;
         }
-        std::error_code ec;
-        const std::filesystem::path source = generated / utf8Path(relative);
-        const auto bytes = std::filesystem::file_size(source, ec);
-        if (!ec)
-            cost = compileCost(pathUtf8(source.filename()), bytes);
     }
-    costs[description] = cost;
-    total += cost;
-    if (cost >= kLargeCompileCost)
-        ++large;
+    return key;
+}
+
+void CompilePlan::scan(const std::filesystem::path &generated, const std::filesystem::path &buildDir) {
+    std::error_code ec;
+    for (auto it = std::filesystem::recursive_directory_iterator(generated, ec);
+         !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+        std::error_code entryError;
+        if (!it->is_regular_file(entryError) || it->path().extension() != ".cpp")
+            continue;
+        File file;
+        file.cost = compileCost(pathUtf8(it->path().filename()), it->file_size(entryError));
+        files[generatedKey(pathUtf8(std::filesystem::path("build/generated") /
+                                    it->path().lexically_relative(generated)))] = file;
+        total += file.cost;
+    }
+    // Compiled already: an object at least as new as its source.
+    for (auto it = std::filesystem::recursive_directory_iterator(buildDir, ec);
+         !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+        const auto extension = it->path().extension();
+        if (extension != ".o" && extension != ".obj")
+            continue;
+        const auto found = files.find(generatedKey(pathUtf8(it->path().lexically_relative(buildDir))));
+        if (found == files.end() || found->second.compiled)
+            continue;
+        std::error_code timeError;
+        const auto objectTime = it->last_write_time(timeError);
+        const auto sourceTime = std::filesystem::last_write_time(generated / utf8Path(found->first), timeError);
+        if (!timeError && objectTime >= sourceTime) {
+            found->second.compiled = true;
+            compiled += found->second.cost;
+        }
+    }
+    for (const auto &[key, file] : files) {
+        if (file.compiled)
+            continue;
+        ++pending;
+        largeLeft += file.cost >= kLargeCompileCost ? 1u : 0u;
+    }
+}
+
+bool CompilePlan::finish(const std::string &description) {
+    const auto found = files.find(generatedKey(description));
+    if (found == files.end())
+        return false;
+    if (!found->second.compiled) {
+        found->second.compiled = true;
+        compiled += found->second.cost;
+        --pending;
+        largeLeft -= found->second.cost >= kLargeCompileCost ? 1u : 0u;
+    }
+    return true;
+}
+
+void CompilePlan::forgetCompiled() {
+    compiled = 0.0;
+    pending = files.size();
+    largeLeft = 0u;
+    for (auto &[key, file] : files) {
+        file.compiled = false;
+        largeLeft += file.cost >= kLargeCompileCost ? 1u : 0u;
+    }
 }
 
 bool parseNinjaProgress(const std::string &line, uint64_t &done, uint64_t &total) {
@@ -355,7 +408,7 @@ bool Pipeline::runStage(Stage stage, const std::function<bool()> &body) {
     return ok;
 }
 
-bool Pipeline::command(Stage stage, const std::vector<std::string> &args, const CompilePlan *plan,
+bool Pipeline::command(Stage stage, const std::vector<std::string> &args, CompilePlan *plan,
                        const std::function<void(const std::string &)> &watch) {
     std::string shown = "$";
     for (const std::string &arg : args)
@@ -370,9 +423,10 @@ bool Pipeline::command(Stage stage, const std::vector<std::string> &args, const 
     // after which only small ones remain at a steady pace.
     auto mark = Clock::now();
     uint64_t markDone = 0u, lastTotal = 0u;
-    bool counting = false, upToDate = false;
-    double doneCost = 0.0;
-    size_t largeDone = 0u;
+    bool counting = false, upToDate = false, planChecked = false;
+    // Steps other than translated files (libraries, links) count one unit each.
+    double otherDone = 0.0;
+    size_t pendingAtStart = plan ? plan->pending : 0u;
     std::string error;
     const int code = runProcess(
         run, m_environment,
@@ -398,27 +452,36 @@ bool Pipeline::command(Stage stage, const std::vector<std::string> &args, const 
             }
             lastTotal = total;
             size_t largeLeft = 0u;
+            double progress = static_cast<double>(done) / static_cast<double>(total);
             if (plan) {
+                // ninja's own count says when a header change rebuilds files
+                // whose objects look current (its first lines are CMake's).
+                if (!planChecked && total > 2u) {
+                    planChecked = true;
+                    if (total > pendingAtStart + 2000u) {
+                        plan->forgetCompiled();
+                        pendingAtStart = plan->pending;
+                    }
+                }
                 // Into a pipe, ninja prints a step's line when it finishes (only
                 // a terminal gets it at the start too), so this step is done.
                 const size_t close = text.find("] ");
-                const auto it = close == std::string::npos ? plan->costs.end()
-                                                           : plan->costs.find(text.substr(close + 2u));
-                const double cost = it == plan->costs.end() ? 1.0 : it->second;
-                doneCost += cost;
-                if (cost >= kLargeCompileCost) {
-                    ++largeDone;
+                const size_t largeBefore = plan->largeLeft;
+                if (close == std::string::npos || !plan->finish(text.substr(close + 2u)))
+                    otherDone += 1.0;
+                if (plan->largeLeft < largeBefore) {
                     mark = now;
                     markDone = done;
                 }
-                largeLeft = plan->large > largeDone ? plan->large - largeDone : 0u;
+                largeLeft = plan->largeLeft;
+                const double others = std::max(otherDone, static_cast<double>(total) - static_cast<double>(pendingAtStart));
+                progress = (plan->compiled + otherDone) / (plan->total + others);
             }
             const double elapsed = std::chrono::duration<double>(now - mark).count();
             const double rate = elapsed > 5.0 ? static_cast<double>(done - markDone) / elapsed : 0.0;
             std::lock_guard lock(m_mutex);
             StageState &state = m_stages[static_cast<size_t>(stage)];
-            state.progress = plan ? std::min(1.0, doneCost / plan->total)
-                                  : static_cast<double>(done) / static_cast<double>(total);
+            state.progress = std::min(1.0, progress);
             state.detail = thousands(done) + " of " + thousands(total);
             if (largeLeft > 0u)
                 state.detail += "  " + std::to_string(largeLeft) + (largeLeft == 1u ? " large file" : " large files") +
@@ -602,17 +665,8 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
         // then stops its compilers.
         runStage(Stage::CompileGame, [&] {
             const std::string dir = pathUtf8(repo / "build" / "game");
-            // A dry run lists this build's steps, so progress can weigh them.
             CompilePlan plan;
-            std::string planError;
-            runProcess({"ninja", "-C", dir, "-n", "dq8"}, m_environment,
-                       [&](const std::string &text) {
-                           uint64_t done = 0u, total = 0u;
-                           const size_t close = text.find("] ");
-                           if (parseNinjaProgress(text, done, total) && close != std::string::npos)
-                               plan.add(text.substr(close + 2u), repo / "build" / "generated");
-                       },
-                       m_cancel, planError);
+            plan.scan(repo / "build" / "generated", repo / "build" / "game");
             if (!command(Stage::CompileGame, {"ninja", "-C", dir, "-j", jobs, "dq8"},
                          plan.total > 0.0 ? &plan : nullptr))
                 return false;

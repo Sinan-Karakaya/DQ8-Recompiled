@@ -36,12 +36,30 @@ struct StageState {
 double compileCost(const std::string &file, uint64_t bytes);
 constexpr double kLargeCompileCost = 100.0;
 
-// The steps a build will run, from ninja's dry run, each with its cost.
+// "SLUS_212.07/FUN_x.cpp" from a ninja description or an object path under
+// build/generated; empty for anything else.
+std::string generatedKey(std::string path);
+
+// Every translated file's cost, and which are already compiled. ninja cannot
+// list the steps ahead (its dry run stops at the glob check CMake adds), so
+// this reads the files: an object newer than its source is compiled.
 struct CompilePlan {
-    std::unordered_map<std::string, double> costs; // by ninja's description
-    double total = 0.0;
-    size_t large = 0; // steps of kLargeCompileCost or more
-    void add(const std::string &description, const std::filesystem::path &generated);
+    struct File {
+        double cost = 1.0;
+        bool compiled = false;
+    };
+    std::unordered_map<std::string, File> files; // by generatedKey
+    double total = 0.0;    // every translated file's cost
+    double compiled = 0.0; // the cost of those compiled, before or during this build
+    size_t pending = 0;    // translated files left to compile
+    size_t largeLeft = 0;  // the large ones among them
+
+    void scan(const std::filesystem::path &generated, const std::filesystem::path &buildDir);
+    // A finished ninja step: marks the translated file it names compiled, or
+    // returns false for any other step.
+    bool finish(const std::string &description);
+    // A header change recompiles everything, whatever the objects' times.
+    void forgetCompiled();
 };
 
 struct PipelineOptions {
@@ -80,7 +98,7 @@ private:
     bool runStage(Stage stage, const std::function<bool()> &body);
     // Runs args for `stage`; with a plan, progress counts each step's cost.
     // `watch` sees every line of output.
-    bool command(Stage stage, const std::vector<std::string> &args, const CompilePlan *plan = nullptr,
+    bool command(Stage stage, const std::vector<std::string> &args, CompilePlan *plan = nullptr,
                  const std::function<void(const std::string &)> &watch = {});
     void set(Stage stage, double progress, const std::string &detail);
     void line(const std::string &text);
