@@ -147,6 +147,11 @@ std::vector<std::string> withCompilerEnvironment(const std::vector<std::string> 
     // Binary: the lines carry their own \r\n, which text mode would double.
     std::ofstream bat(script, std::ios::binary | std::ios::trunc);
     bat << "@echo off\r\ncall \"" << install << "\\VC\\Auxiliary\\Build\\vcvars64.bat\" >nul || exit /b 1\r\n";
+    // Without a Windows SDK, CMake finds cl.exe but not rc.exe, and its first
+    // test program fails to link without saying why.
+    bat << "if not defined WindowsSdkDir (\r\n"
+           "  echo Visual Studio has no Windows SDK: add one in the Visual Studio Installer, then build again.\r\n"
+           "  exit /b 1\r\n)\r\n";
     for (const std::string &arg : args)
         bat << '"' << arg << "\" ";
     bat << "\r\nexit /b %ERRORLEVEL%\r\n";

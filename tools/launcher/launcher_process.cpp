@@ -13,6 +13,43 @@ constexpr char kPathSeparator = ';';
 constexpr char kPathSeparator = ':';
 #endif
 
+// Windows ignores case in variable names and spells its PATH "Path"; SDL's
+// environment does not ignore it. Asked for "PATH", SDL finds nothing there,
+// and setting "PATH" adds a second variable beside "Path".
+std::vector<std::string> spellings(SDL_Environment *env, const std::string &name) {
+    std::vector<std::string> names;
+    char **variables = SDL_GetEnvironmentVariables(env);
+    if (!variables)
+        return names;
+    for (char **variable = variables; *variable; ++variable) {
+        const char *equals = SDL_strchr(*variable, '=');
+        if (!equals)
+            continue;
+        const std::string found(*variable, static_cast<size_t>(equals - *variable));
+#if defined(_WIN32)
+        if (SDL_strcasecmp(found.c_str(), name.c_str()) == 0)
+#else
+        if (found == name)
+#endif
+            names.push_back(found);
+    }
+    SDL_free(variables);
+    return names;
+}
+
+const char *variable(SDL_Environment *env, const std::string &name) {
+    const std::vector<std::string> names = spellings(env, name);
+    return names.empty() ? nullptr : SDL_GetEnvironmentVariable(env, names.front().c_str());
+}
+
+// Replaces `name` whatever its spelling, keeping the one already there.
+void setVariable(SDL_Environment *env, const std::string &name, const std::string &value) {
+    const std::vector<std::string> names = spellings(env, name);
+    for (const std::string &old : names)
+        SDL_UnsetEnvironmentVariable(env, old.c_str());
+    SDL_SetEnvironmentVariable(env, (names.empty() ? name : names.front()).c_str(), value.c_str(), true);
+}
+
 // Spawning searches the launcher's own PATH, not the child's, so commands are
 // resolved here against the augmented one.
 std::string resolve(const std::string &command, const std::vector<std::string> &extraPath) {
@@ -80,9 +117,9 @@ SDL_Process *spawn(const std::vector<std::string> &args, const ChildEnvironment 
 
     SDL_Environment *env = SDL_CreateEnvironment(true);
     if (env) {
-        SDL_SetEnvironmentVariable(env, "PATH", joinedPath(environment.extraPath).c_str(), true);
+        setVariable(env, "PATH", joinedPath(environment.extraPath));
         for (const auto &[name, value] : environment.set)
-            SDL_SetEnvironmentVariable(env, name.c_str(), value.c_str(), true);
+            setVariable(env, name, value);
     }
     const SDL_PropertiesID props = SDL_CreateProperties();
     SDL_SetPointerProperty(props, SDL_PROP_PROCESS_CREATE_ARGS_POINTER, argv.data());
@@ -118,7 +155,7 @@ std::string joinedPath(const std::vector<std::string> &extra) {
     std::string path;
     for (const std::string &dir : extra)
         path += dir + kPathSeparator;
-    if (const char *current = SDL_getenv("PATH"))
+    if (const char *current = variable(SDL_GetEnvironment(), "PATH"))
         path += current;
     return path;
 }
