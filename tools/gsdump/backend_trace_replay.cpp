@@ -53,6 +53,9 @@ int main(int argc, char **argv) try {
         auto hardware = createSdlGpuBackend(error);
         if (!hardware) throw std::runtime_error(error);
         gpu = hardware.get();
+        // Replays at an internal resolution multiple, as the menu sets it.
+        if (const char *scale = std::getenv("DQ8_GS_REPLAY_SCALE"))
+            gpu->setResolutionScale(static_cast<uint32_t>(std::strtoul(scale, nullptr, 10)));
         backend = std::move(hardware);
     }
     const char *workerValue = std::getenv("DQ8_GS_WORKER");
@@ -66,6 +69,16 @@ int main(int argc, char **argv) try {
         std::setvbuf(stdout, nullptr, _IONBF, 0u);
     const char *probeValue = std::getenv("DQ8_GS_TRACE_PROBE_DRAW");
     const uint64_t probeDraw = probeValue ? std::stoull(probeValue) : std::numeric_limits<uint64_t>::max();
+    // DQ8_GS_REPLAY_SKIP=first-last drops those draws, to bisect which one
+    // produces an artifact.
+    uint64_t skipFirst = std::numeric_limits<uint64_t>::max(), skipLast = 0;
+    if (const char *skip = std::getenv("DQ8_GS_REPLAY_SKIP")) {
+        unsigned long long first = 0, last = 0;
+        if (std::sscanf(skip, "%llu-%llu", &first, &last) == 2) {
+            skipFirst = first;
+            skipLast = last;
+        }
+    }
     uint64_t records = 0, draws = 0, frames = 0;
     double seconds = 0;
     while (file.peek() != std::char_traits<char>::eof()) {
@@ -98,12 +111,35 @@ int main(int argc, char **argv) try {
                     c.zbuf.psm, c.zbuf.zmask, static_cast<unsigned long long>(c.tex1));
                 for (unsigned i = 0; i < batch.vertexCount; ++i) {
                     const auto &v = batch.vertices[i];
-                    std::printf("  xy=%.4f,%.4f z=%.0f uv=%u,%u stq=%.5g,%.5g,%.5g rgba=%u,%u,%u,%u\n",
-                        v.x - c.xyoffset.ofx / 16.0f, v.y - c.xyoffset.ofy / 16.0f,
+                    std::printf("  xy=%.4f,%.4f raw=%.4f,%.4f z=%.0f uv=%u,%u stq=%.5g,%.5g,%.5g rgba=%u,%u,%u,%u\n",
+                        v.x - c.xyoffset.ofx / 16.0f, v.y - c.xyoffset.ofy / 16.0f, v.x, v.y,
                         double(v.z), v.u, v.v, v.s, v.t, v.q, v.r, v.g, v.b, v.a);
                 }
             }
-            backend->Submit(batch);
+            if (draws < skipFirst || draws > skipLast)
+                backend->Submit(batch);
+            // DQ8_GS_REPLAY_DUMP_DST=base: after each draw into a target at
+            // that block address, write it (one file per frame, last draw wins).
+            static const char *const dumpDst = std::getenv("DQ8_GS_REPLAY_DUMP_DST");
+            if (const char *dst = dumpDst;
+                dst && (batch.state.context.frame.fbp << 5u) == std::strtoul(dst, nullptr, 16)) {
+                std::vector<uint8_t> snapshot;
+                backend->SnapshotVram(snapshot);
+                GsVram pixels;
+                pixels.attach(snapshot.data(), static_cast<uint32_t>(snapshot.size()));
+                const auto &f = batch.state.context.frame;
+                const uint32_t w = f.fbw * 64u, h = batch.state.context.scissor.y1 + 1u;
+                FrameImage image;
+                image.resize(w, h);
+                for (uint32_t y = 0u; y < h; ++y)
+                    for (uint32_t x = 0u; x < w; ++x) {
+                        const uint32_t value = pixels.read(f.psm, f.fbp << 5u, f.fbw, x, y);
+                        std::memcpy(image.rgba.data() + (static_cast<size_t>(y) * w + x) * 4u, &value, 4u);
+                        image.rgba[(static_cast<size_t>(y) * w + x) * 4u + 3u] = 255u;
+                    }
+                if (!writePng(std::string(argv[3]) + "-dst-" + std::to_string(frames) + ".png", image, error))
+                    throw std::runtime_error(error);
+            }
             if (draws == probeDraw) {
                 std::vector<uint8_t> snapshot;
                 backend->SnapshotVram(snapshot);
@@ -132,6 +168,38 @@ int main(int argc, char **argv) try {
                 if (!writePng(std::string(argv[3]) + "-probe-color.png", color, error) ||
                     !writePng(std::string(argv[3]) + "-probe-alpha.png", alpha, error))
                     throw std::runtime_error(error);
+                // DQ8_GS_TRACE_PROBE_TEXTURE=1: the draw's texture as GS memory
+                // holds it before the draw, raw values (an index for T8/T4).
+                if (std::getenv("DQ8_GS_TRACE_PROBE_TEXTURE") && batch.state.prim.tme) {
+                    const auto &tex = context.tex0;
+                    FrameImage raw, rawAlpha;
+                    raw.resize(1u << tex.tw, 1u << tex.th);
+                    rawAlpha.resize(raw.width, raw.height);
+                    for (uint32_t y = 0u; y < raw.height; ++y)
+                        for (uint32_t x = 0u; x < raw.width; ++x) {
+                            const uint32_t value = pixels.read(tex.psm, tex.tbp0, tex.tbw, x, y);
+                            const size_t offset = (static_cast<size_t>(y) * raw.width + x) * 4u;
+                            raw.rgba[offset] = static_cast<uint8_t>(value);
+                            raw.rgba[offset + 1u] = static_cast<uint8_t>(value >> 8u);
+                            raw.rgba[offset + 2u] = static_cast<uint8_t>(value >> 16u);
+                            raw.rgba[offset + 3u] = 255u;
+                            std::memset(rawAlpha.rgba.data() + offset, static_cast<uint8_t>(value >> 24u), 3u);
+                            rawAlpha.rgba[offset + 3u] = 255u;
+                        }
+                    if (!writePng(std::string(argv[3]) + "-probe-texture.png", raw, error) ||
+                        !writePng(std::string(argv[3]) + "-probe-texture-alpha.png", rawAlpha, error))
+                        throw std::runtime_error(error);
+                    // And the 256-entry CLUT (CSM1, CT32 or CT16) as a 16x16 image.
+                    FrameImage clut;
+                    clut.resize(16u, 16u);
+                    for (uint32_t i = 0u; i < 256u; ++i) {
+                        const uint32_t cx = (i & 7u) | ((i & 0x10u) >> 1u), cy = ((i >> 5u) << 1u) | ((i >> 3u) & 1u);
+                        const uint32_t value = pixels.read(tex.cpsm, tex.cbp, 1u, cx, cy);
+                        std::memcpy(clut.rgba.data() + i * 4u, &value, 4u);
+                    }
+                    if (!writePng(std::string(argv[3]) + "-probe-clut.png", clut, error))
+                        throw std::runtime_error(error);
+                }
                 std::printf("Probed draw=%llu target=%x/%u/%u\n", static_cast<unsigned long long>(draws),
                             context.frame.fbp << 5u, context.frame.fbw, context.frame.psm);
                 return 0;
@@ -176,6 +244,28 @@ int main(int argc, char **argv) try {
             backend->ConsumeLocalToHostBytes(destination.data(), count); break;
         }
         case GsTraceOp::Present: {
+            // DQ8_GS_REPLAY_DUMP_TARGET=base,fbw,psm,width,height writes that
+            // buffer, as GS memory holds it, at every present: a buffer's
+            // animation over the trace without a probe per frame.
+            if (const char *dump = std::getenv("DQ8_GS_REPLAY_DUMP_TARGET")) {
+                unsigned base = 0, bw = 0, psm = 0, w = 0, h = 0;
+                if (std::sscanf(dump, "%x,%u,%x,%u,%u", &base, &bw, &psm, &w, &h) == 5) {
+                    std::vector<uint8_t> snapshot;
+                    backend->SnapshotVram(snapshot);
+                    GsVram pixels;
+                    pixels.attach(snapshot.data(), static_cast<uint32_t>(snapshot.size()));
+                    FrameImage image;
+                    image.resize(w, h);
+                    for (uint32_t y = 0u; y < h; ++y)
+                        for (uint32_t x = 0u; x < w; ++x) {
+                            const uint32_t value = pixels.read(psm, base, bw, x, y);
+                            std::memcpy(image.rgba.data() + (static_cast<size_t>(y) * w + x) * 4u, &value, 4u);
+                            image.rgba[(static_cast<size_t>(y) * w + x) * 4u + 3u] = 255u;
+                        }
+                    if (!writePng(std::string(argv[3]) + "-target-" + std::to_string(frames + 1) + ".png", image, error))
+                        throw std::runtime_error(error);
+                }
+            }
             const auto frame = backend->Present(decode<GSPresentationRequest>(data));
             seconds += std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
             if (!frame.HasHostPixels()) throw std::runtime_error("No host frame");
