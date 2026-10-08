@@ -10,12 +10,12 @@ These downloads build Dragon Quest VIII from your own disc: the launcher transla
 | Linux on x86-64 | `DQ8Recomp-@VERSION@-Linux-x86_64.tar.gz` |
 | Linux on ARM64 | `DQ8Recomp-@VERSION@-Linux-arm64.tar.gz` |
 
-1. Unpack it and open **DQ8Recomp Launcher**, or `dq8-launcher` on Windows and Linux.
+1. Unpack it (on Windows, right-click it and choose **Extract All**) and open **DQ8Recomp Launcher**, or `dq8-launcher` on Windows and Linux.
 2. Drop your disc image on its window and go through its pages with **Continue**. If something is missing, such as a C++ compiler, **Install for me** installs it.
 3. Press **Start building**. The first build takes about ten minutes on a recent computer, longer with fewer cores; later ones only redo what changed.
 4. Press Play.
 
-**macOS** won't open the app the first time, because it isn't signed yet. Open System Settings, then Privacy & Security, and choose **Open Anyway**. Or run this in Terminal: `xattr -dr com.apple.quarantine "DQ8Recomp Launcher.app"`.
+**macOS** blocks the app the first time, because it isn't signed yet. Open Terminal, type `xattr -dr com.apple.quarantine ` (with the space at the end), drag **DQ8Recomp Launcher** onto the Terminal window, and press Return. That unblocks the app and the tools inside it. Then double-click the app.
 
 **Windows** may warn about an unrecognized app: choose **More info**, then **Run anyway**. The build downloads FFmpeg once, so it needs an internet connection.
 
