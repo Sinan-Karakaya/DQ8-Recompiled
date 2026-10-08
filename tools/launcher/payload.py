@@ -133,10 +133,14 @@ def prune(out: Path, target: str) -> None:
                 shutil.rmtree(path)
             elif path.exists():
                 path.unlink()
-    lib = out / "tools" / "python" / "lib"
-    for pattern in ("tcl*", "tk*", "libtcl*", "libtk*", "itcl*", "thread*"):
-        for path in lib.glob(pattern):
-            shutil.rmtree(path) if path.is_dir() else path.unlink()
+    # macOS and Linux keep Tcl and Tk in lib/, beside python3.12/. Windows keeps
+    # them in tcl/, pruned above, and its Lib/ is the standard library itself,
+    # which lib/ finds on a case-blind disk: thread* would take threading.py.
+    if not target.startswith("windows"):
+        lib = out / "tools" / "python" / "lib"
+        for pattern in ("tcl*", "tk*", "libtcl*", "libtk*", "itcl*", "thread*"):
+            for path in lib.glob(pattern):
+                shutil.rmtree(path) if path.is_dir() else path.unlink()
     # CMake's manual, wherever the wheel puts its docs.
     for path in (out / "tools" / "cmake").rglob("*.qch"):
         path.unlink()
