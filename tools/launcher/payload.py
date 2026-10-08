@@ -137,6 +137,9 @@ def prune(out: Path, target: str) -> None:
     for pattern in ("tcl*", "tk*", "libtcl*", "libtk*", "itcl*", "thread*"):
         for path in lib.glob(pattern):
             shutil.rmtree(path) if path.is_dir() else path.unlink()
+    # CMake's manual, wherever the wheel puts its docs.
+    for path in (out / "tools" / "cmake").rglob("*.qch"):
+        path.unlink()
 
 
 def host_platform() -> str:
@@ -375,9 +378,15 @@ def main() -> None:
         wheel = fetch(PYPI + path, digest, cache)
         unpack_wheel(wheel, prefix, dest)
         wheel_licenses(wheel, licenses / {"cmake": "CMake", "ninja": "Ninja"}.get(tool, tool))
-    # CMake's notices, its own and its bundled libraries', without its 9 MB manual.
-    shutil.copytree(tools_dir / "cmake" / "doc" / "cmake", licenses / "CMake", dirs_exist_ok=True,
-                    ignore=shutil.ignore_patterns("*.qch"))
+    # CMake's notices, its own and its bundled libraries', wherever the wheel
+    # keeps them (doc/cmake in the macOS one), without the 9 MB manual.
+    cmake_notices = sorted((tools_dir / "cmake").rglob("LICENSE.rst"), key=lambda path: len(path.parts))
+    if cmake_notices:
+        print(f"payload: CMake's notices from {cmake_notices[0].parent.relative_to(out).as_posix()}", flush=True)
+        shutil.copytree(cmake_notices[0].parent, licenses / "CMake", dirs_exist_ok=True,
+                        ignore=shutil.ignore_patterns("*.qch"))
+    else:
+        print("payload: this CMake wheel has no notices beyond its license", flush=True)
     pkgconf = tools_dir / "pkgconf" / "bin" / exe("pkgconf", target)
     # FindPkgConfig and people look for it under its usual name.
     shutil.copy2(pkgconf, pkgconf.with_name(exe("pkg-config", target)))
