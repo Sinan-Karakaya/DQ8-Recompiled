@@ -129,8 +129,17 @@ std::filesystem::path recompilerPath(const std::filesystem::path &repo);
 std::filesystem::path gamePath(const std::filesystem::path &repo);
 std::filesystem::path extractedDisc(const std::filesystem::path &workspace);
 
-// True when the launcher's last build for this workspace succeeded and what
-// Play needs is still there; a stub or a hand-made build does not count.
-bool launcherBuilt(const std::filesystem::path &repo, const std::filesystem::path &workspace);
+// What a finished build was made from: the game files' folder, the release
+// (empty from a checkout) and the disc it checked.
+struct BuiltFrom {
+    std::filesystem::path workspace;
+    std::string version;
+    std::filesystem::path disc;
+};
+void markBuilt(const std::filesystem::path &repo, const BuiltFrom &from);
+// True when the launcher's last build was made from exactly this and what Play
+// needs is still there. A stub or a hand-made build does not count, nor does
+// one from another release or disc: Play would start the old game.
+bool launcherBuilt(const std::filesystem::path &repo, const BuiltFrom &from);
 
 } // namespace dq8::launcher

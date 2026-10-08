@@ -183,17 +183,23 @@ namespace {
 std::filesystem::path builtMarker(const std::filesystem::path &repo) {
     return repo / "build" / "game" / "launcher-built.txt";
 }
+
+std::string builtText(const BuiltFrom &from) {
+    return pathUtf8(from.workspace) + "\n" + from.version + "\n" + pathUtf8(from.disc) + "\n";
+}
 } // namespace
 
-bool launcherBuilt(const std::filesystem::path &repo, const std::filesystem::path &workspace) {
+void markBuilt(const std::filesystem::path &repo, const BuiltFrom &from) {
+    std::ofstream(builtMarker(repo), std::ios::binary | std::ios::trunc) << builtText(from);
+}
+
+bool launcherBuilt(const std::filesystem::path &repo, const BuiltFrom &from) {
     std::string marker = readText(builtMarker(repo));
-    // A marker written in text mode on Windows ends in \r\n.
-    while (!marker.empty() && (marker.back() == '\n' || marker.back() == '\r'))
-        marker.pop_back();
+    // A marker written in text mode on Windows has \r\n line ends.
+    std::erase(marker, '\r');
     std::error_code ec;
-    return marker == pathUtf8(workspace) &&
-           std::filesystem::is_regular_file(gamePath(repo), ec) &&
-           std::filesystem::is_regular_file(extractedDisc(workspace) / kVersion, ec);
+    return marker == builtText(from) && std::filesystem::is_regular_file(gamePath(repo), ec) &&
+           std::filesystem::is_regular_file(extractedDisc(from.workspace) / kVersion, ec);
 }
 
 double compileCost(const std::string &file, uint64_t bytes) {
@@ -716,7 +722,7 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
             if (!command(Stage::CompileGame, {"ninja", "-C", dir, "-j", jobs, "dq8"},
                          plan.total > 0.0 ? &plan : nullptr))
                 return false;
-            std::ofstream(builtMarker(repo), std::ios::binary | std::ios::trunc) << pathUtf8(options.workspace) << "\n";
+            markBuilt(repo, {options.workspace, payload ? payload->version : std::string(), options.disc});
             return true;
         });
     m_succeeded = ok;

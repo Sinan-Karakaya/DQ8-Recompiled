@@ -81,6 +81,8 @@ private:
     std::filesystem::path buildRepo() const;
     // Where the source is read before anything is built (hashes, the tree's parts).
     std::filesystem::path sourceRoot() const;
+    // What a build must have been made from for Play to start it.
+    BuiltFrom builtFrom() const;
     ChildEnvironment childEnvironment() const;
 
     void setDisc(const std::string &path);
@@ -113,11 +115,12 @@ private:
     std::thread m_toolsThread;
     double m_copiedAt = -10.0;
     // "Install for me": the system's installer runs on a thread that can
-    // outlive the window, so it shares this rather than the app.
+    // outlive the window, so it shares this rather than the app. `stop` ends
+    // the thread's watching before main quits SDL; the installer carries on.
     struct InstallState {
         std::mutex mutex;
         std::string line, error;
-        std::atomic<bool> running{false}, finished{false}, openedInstaller{false};
+        std::atomic<bool> running{false}, finished{false}, openedInstaller{false}, stop{false};
     };
     std::shared_ptr<InstallState> m_install = std::make_shared<InstallState>();
     // Apple's installer works on its own once opened: the page checks again

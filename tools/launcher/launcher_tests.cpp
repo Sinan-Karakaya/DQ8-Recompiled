@@ -19,6 +19,7 @@
 #include <stdexcept>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 using namespace dq8::launcher;
@@ -283,7 +284,8 @@ void payloadUnpacking() {
     std::filesystem::remove_all(root, ec);
 }
 
-// Play is offered only for the launcher's own finished build of this workspace.
+// Play is offered only for the launcher's own finished build of this
+// workspace, release and disc.
 void builtMarker() {
     const std::filesystem::path root = std::filesystem::temp_directory_path() / "dq8-launcher-built";
     std::error_code ec;
@@ -292,12 +294,15 @@ void builtMarker() {
     std::filesystem::create_directories(gamePath(repo).parent_path(), ec);
     std::filesystem::create_directories(extractedDisc(workspace), ec);
     std::ofstream(gamePath(repo)) << "game";
-    require(!launcherBuilt(repo, workspace), "a game built by hand does not count");
-    std::ofstream(repo / "build" / "game" / "launcher-built.txt") << pathUtf8(workspace) << "\n";
-    require(!launcherBuilt(repo, workspace), "nor does one whose game files are missing");
+    const BuiltFrom from{workspace, "a1b2c3d", root / "DQ8.iso"};
+    require(!launcherBuilt(repo, from), "a game built by hand does not count");
+    markBuilt(repo, from);
+    require(!launcherBuilt(repo, from), "nor does one whose game files are missing");
     std::ofstream(extractedDisc(workspace) / "SLUS_212.07") << "elf";
-    require(launcherBuilt(repo, workspace), "the launcher's build with its files");
-    require(!launcherBuilt(repo, root / "elsewhere"), "but not for another workspace");
+    require(launcherBuilt(repo, from), "the launcher's build with its files");
+    require(!launcherBuilt(repo, {root / "elsewhere", from.version, from.disc}), "but not for another workspace");
+    require(!launcherBuilt(repo, {workspace, "e4f5a6b", from.disc}), "nor for another release");
+    require(!launcherBuilt(repo, {workspace, from.version, root / "other.iso"}), "nor for another disc");
     std::filesystem::remove_all(root, ec);
 }
 
@@ -336,18 +341,36 @@ void childProcessToFile() {
 #endif
     std::vector<std::string> lines;
     std::string error;
+    std::atomic<bool> stop{false};
     const int code = runProcessToFile(command, ChildEnvironment{}, log,
-                                      [&](const std::string &line) { lines.push_back(line); }, error);
+                                      [&](const std::string &line) { lines.push_back(line); }, stop, error);
     require(code == 3, "the exit code comes back with the output in a file: " + error);
     require(lines.size() == 2u && lines[0] == "one" && lines[1] == "two", "the file's lines, in order");
-    {
+    const auto logText = [&] {
         std::ifstream file(log, std::ios::binary);
-        const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
-        require(text.find("one") != std::string::npos && text.find("two") != std::string::npos,
-                "and the file keeps them");
-    }
-    require(runProcessToFile({"dq8-no-such-command"}, ChildEnvironment{}, log, {}, error) != 0,
+        return std::string((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    };
+    require(logText().find("one") != std::string::npos && logText().find("two") != std::string::npos,
+            "and the file keeps them");
+    require(runProcessToFile({"dq8-no-such-command"}, ChildEnvironment{}, log, {}, stop, error) != 0,
             "a missing command fails");
+
+    // Closing the launcher stops the watching, not the child.
+    stop = true;
+#if defined(_WIN32)
+    const std::vector<std::string> later = {"cmd", "/c", "ping -n 2 127.0.0.1 >nul & echo late"};
+#else
+    const std::vector<std::string> later = {"sh", "-c", "sleep 1; echo late"};
+#endif
+    const auto started = std::chrono::steady_clock::now();
+    require(runProcessToFile(later, ChildEnvironment{}, log, {}, stop, error) == -1, "stop ends the watching");
+    require(std::chrono::steady_clock::now() - started < std::chrono::milliseconds(500), "at once");
+    bool wrote = false;
+    while (!wrote && std::chrono::steady_clock::now() - started < std::chrono::seconds(10)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        wrote = logText().find("late") != std::string::npos;
+    }
+    require(wrote, "and the child still writes its line");
     std::filesystem::remove_all(log.parent_path(), ec);
 }
 } // namespace

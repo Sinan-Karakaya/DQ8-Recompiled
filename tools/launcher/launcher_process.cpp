@@ -176,7 +176,7 @@ int runProcess(const std::vector<std::string> &args, const ChildEnvironment &env
 
 int runProcessToFile(const std::vector<std::string> &args, const ChildEnvironment &environment,
                      const std::filesystem::path &log, const std::function<void(const std::string &)> &onLine,
-                     std::string &error) {
+                     const std::atomic<bool> &stop, std::string &error) {
     std::error_code ec;
     if (log.has_parent_path())
         std::filesystem::create_directories(log.parent_path(), ec);
@@ -197,6 +197,12 @@ int runProcessToFile(const std::vector<std::string> &args, const ChildEnvironmen
     Sint64 offset = 0;
     int code = -1;
     for (bool exited = false; !exited;) {
+        if (stop.load()) {
+            // Neither kills nor waits for the child.
+            SDL_DestroyProcess(process);
+            error = "Stopped watching.";
+            return -1;
+        }
         // Read after the check, so that the last pass sees all the child wrote.
         exited = SDL_WaitProcess(process, false, &code);
         // Windows keeps the file locked while the child writes it: there the

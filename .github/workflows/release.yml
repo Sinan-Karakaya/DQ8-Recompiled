@@ -7,9 +7,15 @@ name: Release
 on:
   push:
     branches: [main]
+  # What a payload is built from: the launcher, the UI code it shares with the
+  # game, the CMake files the payload's configure runs, and the submodules.
   pull_request:
     paths:
       - 'tools/launcher/**'
+      - 'src/ui/**'
+      - '**/CMakeLists.txt'
+      - 'cmake/**'
+      - 'thirdparty/**'
       - '.github/workflows/release.yml'
       - '.github/release-notes.md'
   workflow_dispatch:

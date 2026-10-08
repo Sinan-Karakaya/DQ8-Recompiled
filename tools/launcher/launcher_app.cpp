@@ -289,13 +289,18 @@ LauncherApp::LauncherApp(std::filesystem::path repo, std::optional<Payload> payl
         setDisc(m_config.disc);
     checkToolsAsync();
     if (m_disc && m_disc->supported)
-        m_page = launcherBuilt(buildRepo(), utf8Path(m_config.workspace)) ? Page::Play : Page::Tools;
+        m_page = launcherBuilt(buildRepo(), builtFrom()) ? Page::Play : Page::Tools;
 }
 
 LauncherApp::~LauncherApp() {
     m_pipeline.cancel();
     if (m_toolsThread.joinable())
         m_toolsThread.join();
+    // The installer's watcher calls SDL, which main quits next: it polls every
+    // 100 ms, so this waits about that long, never for the installer.
+    m_install->stop = true;
+    for (int waited = 0; m_install->running.load() && waited < 200; ++waited)
+        SDL_Delay(10);
 }
 
 std::filesystem::path LauncherApp::buildRepo() const {
@@ -303,6 +308,10 @@ std::filesystem::path LauncherApp::buildRepo() const {
 }
 
 std::filesystem::path LauncherApp::sourceRoot() const { return m_payload ? m_payload->source : m_repo; }
+
+BuiltFrom LauncherApp::builtFrom() const {
+    return {utf8Path(m_config.workspace), m_payload ? m_payload->version : std::string(), utf8Path(m_config.disc)};
+}
 
 ChildEnvironment LauncherApp::childEnvironment() const {
     return m_payload ? payloadEnvironment(*m_payload, buildRepo()) : ChildEnvironment{extraToolDirs(), {}};
@@ -383,7 +392,7 @@ void LauncherApp::runInstall(const InstallAction &action) {
                                               std::lock_guard lock(state->mutex);
                                               state->line = text.size() > 96u ? text.substr(0, 93u) + "..." : text;
                                           },
-                                          error);
+                                          state->stop, error);
         {
             std::lock_guard lock(state->mutex);
             // xcode-select answers 1 when the tools are already there.
@@ -414,7 +423,7 @@ bool LauncherApp::pageDone(Page page) const {
             return false;
         // Asked several times a frame; the files behind it change rarely.
         if (m_time - m_builtCheckedAt > 0.5 || m_time < m_builtCheckedAt) {
-            m_built = launcherBuilt(buildRepo(), utf8Path(m_config.workspace));
+            m_built = launcherBuilt(buildRepo(), builtFrom());
             m_builtCheckedAt = m_time;
         }
         return m_built;
@@ -467,9 +476,9 @@ void LauncherApp::launchGame() {
         return;
     writeGameSettings();
     const std::filesystem::path workspace = utf8Path(m_config.workspace);
-    if (!launcherBuilt(buildRepo(), workspace)) {
-        m_launchError = "The game or its files are missing from " + pathUtf8(extractedDisc(workspace)) +
-                        ". Build again.";
+    if (!launcherBuilt(buildRepo(), builtFrom())) {
+        m_launchError = "Build again: the game was built from another release or disc, or its files are missing "
+                        "from " + pathUtf8(extractedDisc(workspace)) + ".";
         return;
     }
     const std::vector<std::string> args = {pathUtf8(gamePath(buildRepo())),

@@ -30,10 +30,11 @@ int runProcess(const std::vector<std::string> &args, const ChildEnvironment &env
 
 // Like runProcess, but the child writes to `log`, and onLine gets the file's
 // lines as they land. With no pipe back to the launcher, the child carries on
-// unharmed when the launcher exits: installers must not stop halfway.
+// unharmed when the launcher exits: installers must not stop halfway. `stop`
+// ends the watching only (-1): the launcher is closing, and SDL with it.
 int runProcessToFile(const std::vector<std::string> &args, const ChildEnvironment &environment,
                      const std::filesystem::path &log, const std::function<void(const std::string &)> &onLine,
-                     std::string &error);
+                     const std::atomic<bool> &stop, std::string &error);
 
 // The first line of `args`'s output, for version probes; empty on failure.
 std::string probeOutput(const std::vector<std::string> &args, const ChildEnvironment &environment);
