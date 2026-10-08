@@ -1,0 +1,142 @@
+name: Release
+
+# One download per platform: the launcher with everything the game build needs
+# except a C++ compiler (tools/launcher/payload.py). A version tag drafts a
+# GitHub release with them; publishing it stays a person's decision.
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    paths:
+      - 'tools/launcher/**'
+      - '.github/workflows/release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  package:
+    name: Package (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS ARM64
+            os: macos-15
+            archive: DQ8Recomp-macOS-arm64.zip
+          # The oldest supported runner, so the launcher runs on older glibc.
+          - name: Linux x86-64
+            os: ubuntu-22.04
+            archive: DQ8Recomp-Linux-x86_64.tar.gz
+          - name: Windows x86-64
+            os: windows-2025
+            archive: DQ8Recomp-Windows-x86_64.zip
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: recursive
+          fetch-depth: 0 # git describe names the payload
+          persist-credentials: false
+
+      # SDL3's backends and raylib's window need these to build; players need
+      # only the X11 and OpenGL headers, which the launcher can install.
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libx11-dev libxext-dev libxrandr-dev \
+            libxinerama-dev libxcursor-dev libxi-dev libxss-dev libxtst-dev libxkbcommon-dev \
+            libwayland-dev wayland-protocols libdecor-0-dev libegl1-mesa-dev libgl-dev libgbm-dev \
+            libdrm-dev libudev-dev libasound2-dev libpulse-dev
+
+      - name: Build the payload and the launcher
+        if: runner.os != 'Windows'
+        run: |
+          python3 tools/launcher/payload.py --out build/payload
+          tools="$PWD/build/payload/tools"
+          "$tools/cmake/bin/cmake" -S tools/launcher -B build/launcher -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_MAKE_PROGRAM="$tools/ninja/bin/ninja" \
+            -DCMAKE_PREFIX_PATH="$PWD/build/payload/deps"
+          "$tools/cmake/bin/cmake" --build build/launcher
+          if [[ "$RUNNER_OS" == macOS ]]; then export SDL_GPU_DRIVER=metal; fi
+          # The payload leaves ctest out; the runner has its own.
+          ctest --test-dir build/launcher --output-on-failure
+
+      # pwsh stops on nothing by itself, hence every exit code is checked.
+      - name: Build the payload and the launcher (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+          Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
+          python tools/launcher/payload.py --out build/payload
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $tools = "$PWD\build\payload\tools"
+          & "$tools\cmake\bin\cmake.exe" -S tools/launcher -B build/launcher -G Ninja `
+            -DCMAKE_BUILD_TYPE=Release "-DCMAKE_MAKE_PROGRAM=$tools\ninja\bin\ninja.exe" `
+            "-DCMAKE_PREFIX_PATH=$PWD\build\payload\deps"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & "$tools\cmake\bin\cmake.exe" --build build/launcher
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ctest --test-dir build/launcher --output-on-failure
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Package
+        run: |
+          mkdir -p dist
+          case "$RUNNER_OS" in
+            macOS)
+              ditto "build/launcher/DQ8Recomp Launcher.app" "dist/DQ8Recomp Launcher.app"
+              ditto build/payload "dist/DQ8Recomp Launcher.app/Contents/Resources/payload"
+              (cd dist && ditto -c -k --keepParent "DQ8Recomp Launcher.app" "../${{ matrix.archive }}")
+              ;;
+            Linux)
+              mkdir -p dist/DQ8Recomp
+              cp build/launcher/dq8-launcher dist/DQ8Recomp/
+              cp -a build/payload dist/DQ8Recomp/payload
+              tar -C dist -czf "${{ matrix.archive }}" DQ8Recomp
+              ;;
+            Windows)
+              mkdir -p dist/DQ8Recomp
+              cp build/launcher/dq8-launcher.exe dist/DQ8Recomp/
+              cp -r build/payload dist/DQ8Recomp/payload
+              (cd dist && 7z a -tzip -mx=7 "../${{ matrix.archive }}" DQ8Recomp > /dev/null)
+              ;;
+          esac
+          ls -l "${{ matrix.archive }}"
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ matrix.archive }}
+          path: ${{ matrix.archive }}
+          retention-days: 14
+          compression-level: 0
+
+  draft-release:
+    name: Draft the release
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: package
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Draft the release with every platform's archive
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "$GITHUB_REF_NAME" --draft --generate-notes artifacts/*

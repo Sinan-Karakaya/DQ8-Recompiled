@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 #include <system_error>
 #include <utility>
@@ -28,7 +29,8 @@ constexpr Icon kPageIcons[] = {Icon::Disc, Icon::Wrench, Icon::Interface, Icon::
 constexpr const char *kVersion = "SLUS_212.07";
 
 // How much of the whole build each step is, for the overall bar.
-constexpr double kStageWeight[kStageCount] = {0.04, 0.04, 0.05, 0.08, 0.02, 0.77};
+constexpr double kStageWeight[] = {0.04, 0.04, 0.02, 0.05, 0.08, 0.02, 0.75};
+static_assert(std::size(kStageWeight) == kStageCount, "a weight for every step");
 
 std::string humanSize(uint64_t bytes) {
     char text[32];
@@ -250,6 +252,13 @@ void saveConfig(const LauncherConfig &config) {
          << "\njobs=" << config.jobs << '\n';
 }
 
+std::string defaultGamesFolder() {
+    const char *home = SDL_getenv("HOME");
+    if (!home)
+        home = SDL_getenv("USERPROFILE");
+    return home ? pathUtf8(utf8Path(home) / "DQ8Recomp") : std::string("DQ8Recomp");
+}
+
 int defaultJobs() {
     const int cores = std::max(1, SDL_GetNumLogicalCPUCores());
     // Clang peaks at 1.5 GB on the largest translated function (measured over
@@ -258,9 +267,10 @@ int defaultJobs() {
     return std::clamp(std::min(cores, memory), 1, cores);
 }
 
-LauncherApp::LauncherApp(std::filesystem::path repo, SDL_Window *window, const LauncherConfig &overrides,
-                         bool persist)
-    : m_repo(std::move(repo)), m_window(window), m_config(loadConfig()), m_persist(persist) {
+LauncherApp::LauncherApp(std::filesystem::path repo, std::optional<Payload> payload, SDL_Window *window,
+                         const LauncherConfig &overrides, bool persist)
+    : m_repo(std::move(repo)), m_payload(std::move(payload)), m_window(window), m_config(loadConfig()),
+      m_persist(persist) {
     if (!overrides.disc.empty())
         m_config.disc = overrides.disc;
     if (!overrides.workspace.empty())
@@ -268,7 +278,7 @@ LauncherApp::LauncherApp(std::filesystem::path repo, SDL_Window *window, const L
     if (overrides.jobs > 0)
         m_config.jobs = overrides.jobs;
     if (m_config.workspace.empty())
-        m_config.workspace = pathUtf8(m_repo.parent_path());
+        m_config.workspace = m_payload ? defaultGamesFolder() : pathUtf8(m_repo.parent_path());
     if (m_config.jobs <= 0)
         m_config.jobs = defaultJobs();
     m_gameSettingsPath = ui::defaultSettingsPath();
@@ -279,13 +289,23 @@ LauncherApp::LauncherApp(std::filesystem::path repo, SDL_Window *window, const L
         setDisc(m_config.disc);
     checkToolsAsync();
     if (m_disc && m_disc->supported)
-        m_page = launcherBuilt(m_repo, utf8Path(m_config.workspace)) ? Page::Play : Page::Tools;
+        m_page = launcherBuilt(buildRepo(), utf8Path(m_config.workspace)) ? Page::Play : Page::Tools;
 }
 
 LauncherApp::~LauncherApp() {
     m_pipeline.cancel();
     if (m_toolsThread.joinable())
         m_toolsThread.join();
+}
+
+std::filesystem::path LauncherApp::buildRepo() const {
+    return m_payload ? unpackedSource(utf8Path(m_config.workspace)) : m_repo;
+}
+
+std::filesystem::path LauncherApp::sourceRoot() const { return m_payload ? m_payload->source : m_repo; }
+
+ChildEnvironment LauncherApp::childEnvironment() const {
+    return m_payload ? payloadEnvironment(*m_payload, buildRepo()) : ChildEnvironment{extraToolDirs(), {}};
 }
 
 void LauncherApp::handleEvent(const SDL_Event &event) {
@@ -309,7 +329,7 @@ void LauncherApp::handleEvent(const SDL_Event &event) {
 }
 
 void LauncherApp::setDisc(const std::string &path) {
-    m_disc = inspectDisc(m_repo, utf8Path(path));
+    m_disc = inspectDisc(sourceRoot(), utf8Path(path));
     m_config.disc = path;
     if (m_live && m_persist)
         saveConfig(m_config);
@@ -320,13 +340,14 @@ void LauncherApp::checkToolsAsync() {
         return;
     if (m_toolsThread.joinable())
         m_toolsThread.join();
-    m_toolsThread = std::thread([this] {
-        ToolReport report = checkTools(ChildEnvironment{extraToolDirs(), {}});
+    // Taken here: the folder can change on this thread while that one checks.
+    m_toolsThread = std::thread([this, environment = childEnvironment(), source = sourceRoot()] {
+        ToolReport report = checkTools(environment, m_payload ? &*m_payload : nullptr);
         // The source tree's own parts, which a download without submodules lacks.
         for (const char *part : {"thirdparty/PS2Recomp/CMakeLists.txt", "thirdparty/imgui/imgui.cpp",
                                  "thirdparty/simde/simde"}) {
             std::error_code ec;
-            if (!std::filesystem::exists(m_repo / part, ec)) {
+            if (!std::filesystem::exists(source / part, ec)) {
                 ToolCheck tree{"Source tree", "DQ8Recomp's own parts"};
                 tree.found = true;
                 tree.version = "incomplete";
@@ -340,6 +361,41 @@ void LauncherApp::checkToolsAsync() {
         m_tools = std::move(report);
         m_checkingTools = false;
     });
+}
+
+void LauncherApp::runInstall(const InstallAction &action) {
+    if (!m_live || m_install->running.exchange(true))
+        return;
+    {
+        std::lock_guard lock(m_install->mutex);
+        m_install->line.clear();
+        m_install->error.clear();
+    }
+    m_install->finished = false;
+    m_waitingForInstaller = false;
+    // Detached: closing the window must not wait for a long installer.
+    std::thread([state = m_install, action, environment = childEnvironment()] {
+        std::string error;
+        const std::atomic<bool> never{false};
+        const int code = runProcess(
+            action.command, environment,
+            [&state](const std::string &text) {
+                std::lock_guard lock(state->mutex);
+                state->line = text.size() > 96u ? text.substr(0, 93u) + "..." : text;
+            },
+            never, error);
+        {
+            std::lock_guard lock(state->mutex);
+            // xcode-select answers 1 when the tools are already there.
+            if (code != 0 && !action.installerRunsOnItsOwn)
+                state->error = !error.empty() ? error
+                                              : "The installer stopped with code " + std::to_string(code) +
+                                                    "; its last line is above.";
+        }
+        state->openedInstaller = action.installerRunsOnItsOwn && code == 0;
+        state->running = false;
+        state->finished = true;
+    }).detach();
 }
 
 bool LauncherApp::pageDone(Page page) const {
@@ -357,7 +413,7 @@ bool LauncherApp::pageDone(Page page) const {
             return false;
         // Asked several times a frame; the files behind it change rarely.
         if (m_time - m_builtCheckedAt > 0.5 || m_time < m_builtCheckedAt) {
-            m_built = launcherBuilt(m_repo, utf8Path(m_config.workspace));
+            m_built = launcherBuilt(buildRepo(), utf8Path(m_config.workspace));
             m_builtCheckedAt = m_time;
         }
         return m_built;
@@ -396,11 +452,12 @@ void LauncherApp::startBuild() {
     saveConfig(m_config);
     writeGameSettings();
     PipelineOptions options;
-    options.repo = m_repo;
+    options.repo = buildRepo();
     options.disc = utf8Path(m_config.disc);
     options.workspace = utf8Path(m_config.workspace);
     options.jobs = m_config.jobs;
-    m_pipeline.start(options, ChildEnvironment{extraToolDirs(), {}});
+    options.payload = m_payload;
+    m_pipeline.start(options, childEnvironment());
 }
 
 void LauncherApp::launchGame() {
@@ -409,12 +466,12 @@ void LauncherApp::launchGame() {
         return;
     writeGameSettings();
     const std::filesystem::path workspace = utf8Path(m_config.workspace);
-    if (!launcherBuilt(m_repo, workspace)) {
+    if (!launcherBuilt(buildRepo(), workspace)) {
         m_launchError = "The game or its files are missing from " + pathUtf8(extractedDisc(workspace)) +
                         ". Build again.";
         return;
     }
-    const std::vector<std::string> args = {pathUtf8(gamePath(m_repo)),
+    const std::vector<std::string> args = {pathUtf8(gamePath(buildRepo())),
                                            pathUtf8(extractedDisc(workspace) / kVersion),
                                            "--iso=" + m_config.disc, "--gs=sdlgpu"};
     std::vector<const char *> argv;
@@ -471,17 +528,30 @@ void LauncherApp::showPreview(Preview preview) {
         tools.tools.push_back(check);
     };
     const bool missing = preview == Preview::ToolsMissing;
-    add("CMake", "Configures the build", missing ? nullptr : "3.31.6");
-    add("Ninja", "Runs the build", missing ? nullptr : "1.12.1");
-    add("Python", "Translates the game code", "3.13.1");
-    add("C++ compiler", "Compiles the game", "17.0.0");
-    add("pkg-config", "Finds SDL3 and FFmpeg", "2.5.1");
-    add("SDL3", "Window, graphics, sound and controllers", missing ? nullptr : "3.4.16");
-    add("FFmpeg", "Plays the movies; without it they are skipped", "62.11.100", true);
-    add("LLVM", "Archives the large compiled game", "21.1.0");
-    if (missing) {
-        tools.installCommand = "xcode-select --install; brew install cmake ninja pkgconf sdl3 ffmpeg llvm python";
-        tools.instructions = "Paste this into Terminal, wait for it to finish, then check again.";
+    if (m_payload) {
+        // A release: everything but the compiler is included.
+        add("C++ compiler", "Compiles the game", missing ? nullptr : "21.0.0");
+        for (const auto &[name, version] : m_payload->versions)
+            tools.tools.push_back(includedTool(name, version));
+        if (missing) {
+            tools.installCommand = "xcode-select --install";
+            tools.instructions = "The compiler comes with Apple's Command Line Tools.";
+            tools.install = commandLineToolsInstall();
+        }
+    } else {
+        add("C++ compiler", "Compiles the game", "17.0.0");
+        add("CMake", "Configures the build", missing ? nullptr : "3.31.6");
+        add("Ninja", "Runs the build", missing ? nullptr : "1.12.1");
+        add("Python", "Translates the game code", "3.13.1");
+        add("pkg-config", "Finds SDL3 and FFmpeg", "2.5.1");
+        add("SDL3", "Window, graphics, sound and controllers", missing ? nullptr : "3.4.16");
+        add("FFmpeg", "Plays the movies; without it they are skipped", "62.11.100", true);
+        add("LLVM", "Archives the compiled game faster", "21.1.0", true);
+        if (missing) {
+            tools.installCommand = "brew install cmake ninja pkgconf sdl3 ffmpeg llvm python";
+            tools.instructions = "Homebrew can install the rest.";
+            tools.install = InstallAction{"Install with Homebrew", "Homebrew installs them; it takes a while.", {}};
+        }
     }
     {
         std::lock_guard lock(m_toolsMutex);
@@ -512,6 +582,7 @@ void LauncherApp::showPreview(Preview preview) {
         // A real first build on an M-series Mac, 25 minutes into compiling.
         done(Stage::CheckDisc, 23.0, "4.18 GB checked");
         done(Stage::ExtractDisc, 4.0, "4.18 GB copied");
+        done(Stage::UnpackSource, 3.0, "Version 1.0");
         done(Stage::BuildRecompiler, 58.0, "123 of 123");
         done(Stage::TranslateGame, 6.0, "12,446 files");
         done(Stage::ConfigureGame, 34.0, "Ready");
@@ -563,6 +634,23 @@ void LauncherApp::drawBackground() {
 
 void LauncherApp::draw() {
     m_time = ImGui::GetTime();
+    // An installer finished, wherever the player is meanwhile.
+    if (m_install->finished.exchange(false)) {
+        m_waitingForInstaller = m_install->openedInstaller.load();
+        m_lastInstallCheck = m_time;
+        checkToolsAsync();
+    }
+    if (m_waitingForInstaller && !m_checkingTools.load() && m_time - m_lastInstallCheck > 5.0) {
+        bool compiler = false;
+        {
+            std::lock_guard lock(m_toolsMutex);
+            compiler = m_tools && !m_tools->tools.empty() && m_tools->tools.front().usable();
+        }
+        m_waitingForInstaller = !compiler;
+        m_lastInstallCheck = m_time;
+        if (m_waitingForInstaller)
+            checkToolsAsync();
+    }
     std::optional<std::string> pickedDisc, pickedWorkspace;
     {
         std::lock_guard lock(m_picks->mutex);
@@ -800,9 +888,10 @@ void LauncherApp::drawDiscPage() {
 }
 
 void LauncherApp::drawToolsPage() {
-    title("Tools",
-          "Building the game takes a few free developer tools. The launcher looks for them; it installs "
-          "nothing by itself.");
+    title("Tools", m_payload ? "DQ8Recomp brings the tools it builds with. Only the C++ compiler comes from your "
+                               "system, and the launcher can install it."
+                             : "Building the game takes a few free developer tools. The launcher looks for them "
+                               "and can install what is missing.");
     std::optional<ToolReport> report;
     {
         std::lock_guard lock(m_toolsMutex);
@@ -829,11 +918,42 @@ void LauncherApp::drawToolsPage() {
     } else {
         if (!report->instructions.empty())
             wrapped(palette::kText, report->instructions);
+        const bool installing = m_install->running.load();
+        if (report->install) {
+            wrapped(palette::kTextMuted, report->install->explanation);
+            ImGui::Dummy(ImVec2(0.0f, em(0.2f)));
+            ImGui::BeginDisabled(installing || m_waitingForInstaller || !m_live);
+            if (ui::iconButton(report->install->label.c_str(), Icon::Wrench, true))
+                runInstall(*report->install);
+            ImGui::EndDisabled();
+        }
+        if (installing || m_waitingForInstaller) {
+            std::string line;
+            {
+                std::lock_guard lock(m_install->mutex);
+                line = m_install->line;
+            }
+            const ImVec2 at = ImGui::GetCursorScreenPos();
+            spinner(list, ImVec2(at.x + em(0.7f), at.y + em(0.7f)), em(0.55f), m_time, palette::kGold);
+            ImGui::Dummy(ImVec2(em(1.6f), em(1.4f)));
+            ImGui::SameLine();
+            ImGui::TextUnformatted(installing ? (line.empty() ? "Installing..." : line.c_str())
+                                              : "Waiting for Apple's installer to finish...");
+        }
+        std::string installError;
+        {
+            std::lock_guard lock(m_install->mutex);
+            installError = m_install->error;
+        }
+        if (!installError.empty())
+            wrapped(palette::kBad, installError);
         if (!report->installCommand.empty()) {
             ImGui::Dummy(ImVec2(0.0f, em(0.2f)));
+            if (report->install)
+                wrapped(palette::kTextMuted, "Or yourself, in a terminal:");
             commandWell(report->installCommand, m_copiedAt, m_time);
         }
-        ImGui::BeginDisabled(m_checkingTools.load() || !m_live);
+        ImGui::BeginDisabled(m_checkingTools.load() || installing || !m_live);
         if (ui::iconButton("Check again", Icon::Reset))
             checkToolsAsync();
         ImGui::EndDisabled();
@@ -875,7 +995,11 @@ void LauncherApp::drawToolsPage() {
             ImGui::PopStyleColor();
             ImGui::TableNextColumn();
             ImGui::SetCursorPosY(ImGui::GetCursorPosY() + lift);
-            if (tool.found)
+            if (tool.included) {
+                ImGui::TextUnformatted(tool.version.c_str());
+                ImGui::SameLine(0.0f, em(0.4f));
+                ImGui::TextColored(color(palette::kTextMuted), "included");
+            } else if (tool.found)
                 ImGui::TextColored(color(tool.problem.empty() ? palette::kText : palette::kWarn), "%s",
                                    tool.version.c_str());
             else

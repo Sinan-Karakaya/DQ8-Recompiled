@@ -114,15 +114,10 @@ std::vector<std::string> extraToolDirs() {
     return dirs;
 }
 
-ToolReport checkTools(const ChildEnvironment &environment) {
-    ToolReport report;
-    report.tools.push_back(probe("CMake", "Configures the build", {"cmake", "--version"}, environment, {3, 24}));
-    report.tools.push_back(probe("Ninja", "Runs the build", {"ninja", "--version"}, environment));
+namespace {
+// What no release can carry: Apple's SDK, Microsoft's, a distribution's.
+ToolCheck checkCompiler(const ChildEnvironment &environment) {
 #if defined(_WIN32)
-    ToolCheck python = probe("Python", "Translates the game code", {"py", "-3", "--version"}, environment, {3, 10});
-    if (!python.found)
-        python = probe("Python", "Translates the game code", {"python", "--version"}, environment, {3, 10});
-    report.tools.push_back(python);
     ToolCheck compiler{"Visual Studio C++", "Compiles the game"};
     const std::string vswhere = "C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe";
     const std::string found = probeOutput({vswhere, "-latest", "-products", "*", "-requires",
@@ -131,60 +126,179 @@ ToolReport checkTools(const ChildEnvironment &environment) {
                                           environment);
     compiler.found = !found.empty();
     compiler.version = found;
-    report.tools.push_back(compiler);
+    return compiler;
 #else
-    report.tools.push_back(
-        probe("Python", "Translates the game code", {"python3", "--version"}, environment, {3, 10}));
-    report.tools.push_back(probe("C++ compiler", "Compiles the game", {"c++", "--version"}, environment));
-    report.tools.push_back(probe("pkg-config", "Finds SDL3 and FFmpeg", {"pkg-config", "--version"}, environment));
-    report.tools.push_back(probe("SDL3", "Window, graphics, sound and controllers",
-                                 {"pkg-config", "--modversion", "sdl3"}, environment, {3, 2}));
-    report.tools.push_back(probe("FFmpeg", "Plays the movies; without it they are skipped",
-                                 {"pkg-config", "--modversion", "libavcodec"}, environment));
-    report.tools.back().optional = true;
-#endif
 #if defined(__APPLE__)
-    // Homebrew's LLVM stays off the build's PATH, where its clang++ would replace
-    // Apple's; CMake finds llvm-ar in these directories by itself.
-    ChildEnvironment llvm = environment;
-    llvm.extraPath.insert(llvm.extraPath.end(), {"/opt/homebrew/opt/llvm/bin", "/usr/local/opt/llvm/bin"});
-    report.tools.push_back(probe("LLVM", "Archives the large compiled game", {"llvm-ar", "--version"}, llvm));
+    // Without the Command Line Tools, running c++ itself pops Apple's installer.
+    if (probeOutput({"xcode-select", "-p"}, environment).empty())
+        return ToolCheck{"C++ compiler", "Compiles the game"};
+#endif
+    return probe("C++ compiler", "Compiles the game", {"c++", "--version"}, environment);
+#endif
+}
+
+#if defined(__linux__)
+// The game's window comes from raylib, which builds against X11 and OpenGL.
+ToolCheck checkWindowHeaders() {
+    ToolCheck check{"Window headers", "X11 and OpenGL, for the game's window"};
+    std::string missing;
+    for (const char *header : {"X11/Xlib.h", "X11/extensions/Xrandr.h", "X11/extensions/Xinerama.h",
+                               "X11/Xcursor/Xcursor.h", "X11/extensions/XInput2.h", "GL/gl.h"}) {
+        std::error_code ec;
+        if (!std::filesystem::exists(std::filesystem::path("/usr/include") / header, ec))
+            missing += (missing.empty() ? "" : ", ") + std::string(header);
+    }
+    check.found = missing.empty();
+    check.version = missing.empty() ? "found" : "";
+    if (!missing.empty())
+        check.purpose = "Missing " + missing;
+    return check;
+}
+
+// Runs a distribution's package command with its password prompt, when it has one.
+std::optional<InstallAction> packageAction(const std::string &command, const ChildEnvironment &environment) {
+    if (command.empty() || probeOutput({"pkexec", "--version"}, environment).empty())
+        return std::nullopt;
+    return InstallAction{"Install for me", "Your system asks for your password, then installs them.",
+                         {"pkexec", "sh", "-c", command}};
+}
 #endif
 
-    if (std::all_of(report.tools.begin(), report.tools.end(), [](const ToolCheck &tool) { return tool.usable(); }))
-        return report;
+const char *includedPurpose(const std::string &name) {
+    if (name == "Python")
+        return "Translates the game code";
+    if (name == "CMake")
+        return "Configures the build";
+    if (name == "Ninja")
+        return "Runs the build";
+    if (name == "pkgconf")
+        return "Finds SDL3 and FFmpeg";
+    if (name == "SDL3")
+        return "Window, graphics, sound and controllers";
+    if (name == "FFmpeg")
+        return "Plays the movies";
+    return "";
+}
+} // namespace
+
+ToolCheck includedTool(const std::string &name, const std::string &version) {
+    ToolCheck tool{name, includedPurpose(name)};
+    tool.found = true;
+    tool.included = true;
+    tool.version = version;
+    return tool;
+}
+
+InstallAction commandLineToolsInstall() {
+    return InstallAction{"Install the Command Line Tools",
+                         "Apple's installer opens; accept it, and it downloads them in a few minutes.",
+                         {"xcode-select", "--install"}, true};
+}
+
+ToolReport checkTools(const ChildEnvironment &environment, const Payload *payload) {
+    ToolReport report;
+    report.tools.push_back(checkCompiler(environment));
+#if defined(__linux__)
+    report.tools.push_back(checkWindowHeaders());
+#endif
+    if (payload) {
+        for (const auto &[name, version] : payload->versions)
+            report.tools.push_back(includedTool(name, version));
+    } else {
+        report.tools.push_back(probe("CMake", "Configures the build", {"cmake", "--version"}, environment, {3, 24}));
+        report.tools.push_back(probe("Ninja", "Runs the build", {"ninja", "--version"}, environment));
+#if defined(_WIN32)
+        ToolCheck python =
+            probe("Python", "Translates the game code", {"py", "-3", "--version"}, environment, {3, 10});
+        if (!python.found)
+            python = probe("Python", "Translates the game code", {"python", "--version"}, environment, {3, 10});
+        report.tools.push_back(python);
+#else
+        report.tools.push_back(
+            probe("Python", "Translates the game code", {"python3", "--version"}, environment, {3, 10}));
+        report.tools.push_back(
+            probe("pkg-config", "Finds SDL3 and FFmpeg", {"pkg-config", "--version"}, environment));
+        report.tools.push_back(probe("SDL3", "Window, graphics, sound and controllers",
+                                     {"pkg-config", "--modversion", "sdl3"}, environment, {3, 2}));
+        report.tools.push_back(probe("FFmpeg", "Plays the movies; without it they are skipped",
+                                     {"pkg-config", "--modversion", "libavcodec"}, environment));
+        report.tools.back().optional = true;
+#endif
 #if defined(__APPLE__)
-    if (probeOutput({"brew", "--version"}, environment).empty()) {
+        // Homebrew's LLVM stays off the build's PATH, where its clang++ would
+        // replace Apple's; CMake finds llvm-ar there by itself, and without it
+        // splits the archive.
+        ChildEnvironment llvm = environment;
+        llvm.extraPath.insert(llvm.extraPath.end(), {"/opt/homebrew/opt/llvm/bin", "/usr/local/opt/llvm/bin"});
+        report.tools.push_back(probe("LLVM", "Archives the compiled game faster", {"llvm-ar", "--version"}, llvm));
+        report.tools.back().optional = true;
+#endif
+    }
+
+    if (report.ready())
+        return report;
+    [[maybe_unused]] const bool compilerMissing = !report.tools.front().usable();
+#if defined(__APPLE__)
+    if (compilerMissing) {
+        report.installCommand = "xcode-select --install";
+        report.instructions = "The compiler comes with Apple's Command Line Tools.";
+        report.install = commandLineToolsInstall();
+    } else if (probeOutput({"brew", "--version"}, environment).empty()) {
         report.instructions = "Install Homebrew from brew.sh, then come back and check again.";
     } else {
-        report.installCommand = "xcode-select --install; brew install cmake ninja pkgconf sdl3 ffmpeg llvm python";
-        report.instructions = "Paste this into Terminal, wait for it to finish, then check again.";
+        report.installCommand = "brew install cmake ninja pkgconf sdl3 ffmpeg llvm python";
+        report.instructions = "Homebrew can install the rest.";
+        report.install = InstallAction{"Install with Homebrew", "Homebrew installs them; it takes a while.",
+                                       {"brew", "install", "cmake", "ninja", "pkgconf", "sdl3", "ffmpeg", "llvm",
+                                        "python"}};
     }
 #elif defined(_WIN32)
-    report.installCommand = "winget install Kitware.CMake Ninja-build.Ninja Python.Python.3.12 "
-                            "Microsoft.VisualStudio.2022.BuildTools";
-    report.instructions = "Paste this into a terminal. In the Visual Studio installer that follows, pick "
-                          "\"Desktop development with C++\". SDL3 and FFmpeg come from vcpkg; see the wiki's "
-                          "Building page.";
+    if (payload) {
+        report.installCommand = "winget install --id Microsoft.VisualStudio.2022.BuildTools -e --override "
+                                "\"--passive --wait --add Microsoft.VisualStudio.Workload.VCTools "
+                                "--includeRecommended\"";
+        report.instructions = "The compiler comes with Microsoft's Visual Studio Build Tools.";
+    } else {
+        report.installCommand = "winget install Kitware.CMake Ninja-build.Ninja Python.Python.3.12 "
+                                "Microsoft.VisualStudio.2022.BuildTools";
+        report.instructions = "Paste this into a terminal. In the Visual Studio installer that follows, pick "
+                              "\"Desktop development with C++\". SDL3 and FFmpeg come from vcpkg; see the wiki's "
+                              "Building page.";
+    }
+    if (compilerMissing)
+        report.install = InstallAction{
+            "Install the Build Tools",
+            "Windows asks for permission, then downloads several gigabytes. Pressing it accepts Microsoft's "
+            "license terms for the Build Tools.",
+            {"winget", "install", "--id", "Microsoft.VisualStudio.2022.BuildTools", "-e",
+             "--accept-package-agreements", "--accept-source-agreements", "--override",
+             "--passive --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"}};
 #else
     const std::string distro = distribution();
+    std::string command;
     if (distro.find("debian") != std::string::npos || distro.find("ubuntu") != std::string::npos) {
-        report.installCommand = "sudo apt install cmake ninja-build python3 g++ pkg-config libsdl3-dev "
-                                "libavcodec-dev libavformat-dev libavutil-dev libswresample-dev libswscale-dev "
-                                "libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libgl-dev "
-                                "libasound2-dev";
+        command = payload ? "apt-get update && apt-get install -y g++ libx11-dev libxrandr-dev libxinerama-dev "
+                            "libxcursor-dev libxi-dev libgl-dev"
+                          : "apt-get update && apt-get install -y cmake ninja-build python3 g++ pkg-config "
+                            "libsdl3-dev libavcodec-dev libavformat-dev libavutil-dev libswresample-dev "
+                            "libswscale-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev "
+                            "libgl-dev libasound2-dev";
     } else if (distro.find("fedora") != std::string::npos || distro.find("rhel") != std::string::npos) {
-        report.installCommand = "sudo dnf install cmake ninja-build python3 gcc-c++ pkgconf SDL3-devel "
-                                "ffmpeg-free-devel libX11-devel libXrandr-devel libXinerama-devel "
-                                "libXcursor-devel libXi-devel mesa-libGL-devel alsa-lib-devel";
+        command = payload ? "dnf install -y gcc-c++ libX11-devel libXrandr-devel libXinerama-devel "
+                            "libXcursor-devel libXi-devel mesa-libGL-devel"
+                          : "dnf install -y cmake ninja-build python3 gcc-c++ pkgconf SDL3-devel ffmpeg-free-devel "
+                            "libX11-devel libXrandr-devel libXinerama-devel libXcursor-devel libXi-devel "
+                            "mesa-libGL-devel alsa-lib-devel";
     } else if (distro.find("arch") != std::string::npos) {
-        report.installCommand = "sudo pacman -S --needed cmake ninja python gcc pkgconf sdl3 ffmpeg libx11 "
-                                "libxrandr libxinerama libxcursor libxi mesa alsa-lib";
+        command = payload ? "pacman -S --needed --noconfirm gcc libx11 libxrandr libxinerama libxcursor libxi mesa"
+                          : "pacman -S --needed --noconfirm cmake ninja python gcc pkgconf sdl3 ffmpeg libx11 "
+                            "libxrandr libxinerama libxcursor libxi mesa alsa-lib";
     }
-    report.instructions = report.installCommand.empty()
-                              ? "Install the tools above with your distribution's package manager, then check "
-                                "again."
-                              : "Paste this into a terminal, then check again.";
+    report.installCommand = command.empty() ? std::string() : "sudo sh -c '" + command + "'";
+    report.instructions = command.empty() ? "Install the tools above with your distribution's package manager, "
+                                            "then check again."
+                                          : "Your distribution's packages provide them.";
+    report.install = packageAction(command, environment);
 #endif
     return report;
 }

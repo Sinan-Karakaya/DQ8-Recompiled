@@ -35,25 +35,46 @@ if(DQ8_LINK_GENERATED)
         "dq8: linking ${DQ8_GENERATED_SOURCE_COUNT} generated translation "
         "units from ${DQ8_GENERATED_DIR}")
 
-    # Isolate corpus optimization flags and rebuilds from the launcher.
-    add_library(dq8_generated STATIC ${DQ8_GENERATED_SOURCES})
-    target_link_libraries(dq8_generated PRIVATE dq8_host_simd)
-
-    target_include_directories(dq8_generated PRIVATE
-        "${DQ8_GENERATED_DIR}"
-        "${CMAKE_SOURCE_DIR}/thirdparty/PS2Recomp/ps2xRuntime/include"
-        "${CMAKE_SOURCE_DIR}/thirdparty/PS2Recomp/ps2xRuntime/include/runtime"
-        "${CMAKE_SOURCE_DIR}/thirdparty/PS2Recomp/ps2xIOP/include"
-        "${CMAKE_SOURCE_DIR}/thirdparty/PS2Recomp/ps2xRuntime/src/lib/Kernel"
-    )
-
+    # Isolate corpus optimization flags and rebuilds from the launcher. One
+    # archive, or parts of 1,500 files whose ar command needs no response file
+    # (top-level CMakeLists.txt); the first part owns the precompiled header.
     separate_arguments(DQ8_GENERATED_OPTFLAGS_LIST UNIX_COMMAND "${DQ8_GENERATED_OPTFLAGS}")
-    target_compile_options(dq8_generated PRIVATE ${DQ8_GENERATED_OPTFLAGS_LIST})
-    # Every function includes the same runtime and large generated declarations.
-    target_precompile_headers(dq8_generated PRIVATE
-        <ps2_runtime_macros.h> <ps2_runtime.h>
-        <ps2_recompiled_functions.h> <ps2_recompiled_stubs.h>
-        <ps2_syscalls.h> <ps2_stubs.h>)
+    set(DQ8_GENERATED_PART_SIZE ${DQ8_GENERATED_SOURCE_COUNT})
+    if(DQ8_SPLIT_GENERATED_ARCHIVE)
+        set(DQ8_GENERATED_PART_SIZE 1500)
+    endif()
+    set(DQ8_GENERATED_TARGETS)
+    set(DQ8_GENERATED_PART_BEGIN 0)
+    while(DQ8_GENERATED_PART_BEGIN LESS DQ8_GENERATED_SOURCE_COUNT)
+        list(LENGTH DQ8_GENERATED_TARGETS DQ8_GENERATED_PART)
+        set(DQ8_GENERATED_TARGET dq8_generated)
+        if(DQ8_GENERATED_PART GREATER 0)
+            set(DQ8_GENERATED_TARGET dq8_generated_${DQ8_GENERATED_PART})
+        endif()
+        list(SUBLIST DQ8_GENERATED_SOURCES ${DQ8_GENERATED_PART_BEGIN} ${DQ8_GENERATED_PART_SIZE}
+             DQ8_GENERATED_PART_SOURCES)
+        add_library(${DQ8_GENERATED_TARGET} STATIC ${DQ8_GENERATED_PART_SOURCES})
+        target_link_libraries(${DQ8_GENERATED_TARGET} PRIVATE dq8_host_simd)
+        target_include_directories(${DQ8_GENERATED_TARGET} PRIVATE
+            "${DQ8_GENERATED_DIR}"
+            "${CMAKE_SOURCE_DIR}/thirdparty/PS2Recomp/ps2xRuntime/include"
+            "${CMAKE_SOURCE_DIR}/thirdparty/PS2Recomp/ps2xRuntime/include/runtime"
+            "${CMAKE_SOURCE_DIR}/thirdparty/PS2Recomp/ps2xIOP/include"
+            "${CMAKE_SOURCE_DIR}/thirdparty/PS2Recomp/ps2xRuntime/src/lib/Kernel"
+        )
+        target_compile_options(${DQ8_GENERATED_TARGET} PRIVATE ${DQ8_GENERATED_OPTFLAGS_LIST})
+        if(DQ8_GENERATED_PART EQUAL 0)
+            # Every function includes the same runtime and large generated declarations.
+            target_precompile_headers(dq8_generated PRIVATE
+                <ps2_runtime_macros.h> <ps2_runtime.h>
+                <ps2_recompiled_functions.h> <ps2_recompiled_stubs.h>
+                <ps2_syscalls.h> <ps2_stubs.h>)
+        else()
+            target_precompile_headers(${DQ8_GENERATED_TARGET} REUSE_FROM dq8_generated)
+        endif()
+        list(APPEND DQ8_GENERATED_TARGETS ${DQ8_GENERATED_TARGET})
+        math(EXPR DQ8_GENERATED_PART_BEGIN "${DQ8_GENERATED_PART_BEGIN} + ${DQ8_GENERATED_PART_SIZE}")
+    endwhile()
 
     # Prefer lld for the large generated corpus.
     find_program(DQ8_LLD_PROGRAM ld.lld)
@@ -62,7 +83,7 @@ if(DQ8_LINK_GENERATED)
         target_link_options(dq8 PRIVATE -fuse-ld=lld)
     endif()
 
-    target_link_libraries(dq8 PRIVATE dq8_generated ps2_runtime)
+    target_link_libraries(dq8 PRIVATE ${DQ8_GENERATED_TARGETS} ps2_runtime)
     target_compile_definitions(dq8 PRIVATE DQ8_LINK_GENERATED=1)
 
     # The hardware GS backend, when SDL3 was found. Selected at runtime with

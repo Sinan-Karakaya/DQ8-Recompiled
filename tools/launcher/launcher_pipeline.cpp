@@ -159,6 +159,7 @@ const char *stageTitle(Stage stage) {
     switch (stage) {
     case Stage::CheckDisc: return "Check the disc";
     case Stage::ExtractDisc: return "Copy the disc's files";
+    case Stage::UnpackSource: return "Unpack DQ8Recomp";
     case Stage::BuildRecompiler: return "Build the recompiler";
     case Stage::TranslateGame: return "Translate the game";
     case Stage::ConfigureGame: return "Prepare the build";
@@ -374,6 +375,13 @@ void Pipeline::set(Stage stage, double progress, const std::string &detail) {
     state.detail = detail;
 }
 
+void Pipeline::skip(Stage stage, const std::string &detail) {
+    std::lock_guard lock(m_mutex);
+    StageState &state = m_stages[static_cast<size_t>(stage)];
+    state.status = StageState::Status::Skipped;
+    state.detail = detail;
+}
+
 void Pipeline::line(const std::string &text) {
     std::lock_guard lock(m_mutex);
     m_log.push_back(text);
@@ -520,9 +528,17 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
     std::filesystem::remove(builtMarker(repo), ec);
     const std::filesystem::path extracted = extractedDisc(options.workspace);
     const std::string jobs = std::to_string(std::max(1, options.jobs));
+    const std::optional<Payload> &payload = options.payload;
+    // Both CMake configures use the payload's libraries and fetched sources.
+    const std::vector<std::string> payloadArgs = payload ? payloadCMakeArgs(*payload, repo) : std::vector<std::string>{};
+    const auto withPayload = [&](std::vector<std::string> args) {
+        args.insert(args.end(), payloadArgs.begin(), payloadArgs.end());
+        return args;
+    };
     JsonValue hashes;
     std::string error;
-    if (!loadHashes(repo, hashes, error)) {
+    // A payload's tree is not unpacked yet; its hashes are the same.
+    if (!loadHashes(payload ? payload->source : repo, hashes, error)) {
         std::lock_guard lock(m_mutex);
         m_error = error;
         m_running = false;
@@ -591,17 +607,35 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
                 set(Stage::ExtractDisc, 1.0, gigabytes(copied) + " copied");
                 return true;
             }
-            std::lock_guard lock(m_mutex);
-            m_stages[1].status = StageState::Status::Skipped;
-            m_stages[1].detail = "Copied before";
+            skip(Stage::ExtractDisc, "Copied before");
             return true;
+        }) &&
+        runStage(Stage::UnpackSource, [&] {
+            if (!payload) {
+                skip(Stage::UnpackSource, "Using this checkout");
+                return true;
+            }
+            switch (unpackPayload(*payload, repo,
+                                  [&](uint64_t done, uint64_t total) {
+                                      set(Stage::UnpackSource, total ? double(done) / double(total) : 0.0,
+                                          gigabytes(done) + " of " + gigabytes(total));
+                                      return !m_cancel.load();
+                                  },
+                                  error)) {
+            case Unpacked::AlreadyThere: skip(Stage::UnpackSource, "Unpacked before"); return true;
+            case Unpacked::Copied: set(Stage::UnpackSource, 1.0, "Version " + payload->version); return true;
+            case Unpacked::Failed: break;
+            }
+            std::lock_guard lock(m_mutex);
+            m_error = error;
+            return false;
         }) &&
         runStage(Stage::BuildRecompiler, [&] {
             const std::string dir = pathUtf8(repo / "build" / "ps2recomp-standalone");
             return command(Stage::BuildRecompiler,
-                           {"cmake", "-S", pathUtf8(repo / "thirdparty" / "PS2Recomp"), "-B", dir, "-G", "Ninja",
-                            "-DCMAKE_BUILD_TYPE=Release", "-DPS2X_BUILD_RUNTIME=OFF", "-DPS2X_BUILD_STUDIO=OFF",
-                            "-DPS2X_BUILD_TEST=OFF"}) &&
+                           withPayload({"cmake", "-S", pathUtf8(repo / "thirdparty" / "PS2Recomp"), "-B", dir, "-G",
+                                        "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DPS2X_BUILD_RUNTIME=OFF",
+                                        "-DPS2X_BUILD_STUDIO=OFF", "-DPS2X_BUILD_TEST=OFF"})) &&
                    command(Stage::BuildRecompiler, {"ninja", "-C", dir, "-j", jobs, "ps2_recomp"});
         }) &&
         runStage(Stage::TranslateGame, [&] {
@@ -611,13 +645,12 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
             const std::string inputs = translationInputs(repo, extracted, hashes);
             std::error_code dirError;
             if (std::filesystem::is_directory(generated / kVersion, dirError) && readText(stampPath) == inputs) {
-                std::lock_guard lock(m_mutex);
-                m_stages[3].status = StageState::Status::Skipped;
-                m_stages[3].detail = "Translated before";
+                skip(Stage::TranslateGame, "Translated before");
                 return true;
             }
             std::filesystem::remove(stampPath, dirError);
-            std::vector<std::string> args = pythonCommand();
+            std::vector<std::string> args =
+                payload ? std::vector<std::string>{pathUtf8(payload->python)} : pythonCommand();
             for (const std::string &arg : {pathUtf8(repo / "setup.py"), std::string("recompile"),
                                            std::string("--version"), std::string(kVersion),
                                            std::string("--extracted"), pathUtf8(extracted),
@@ -634,17 +667,17 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
             return true;
         }) &&
         runStage(Stage::ConfigureGame, [&] {
-            std::vector<std::string> args = {"cmake", "-S", pathUtf8(repo), "-B", pathUtf8(repo / "build" / "game"),
-                                             "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
-                                             "-DDQ8_LINK_GENERATED=ON", "-DDQ8_LINK_OVERLAYS=ON",
-                                             "-DDQ8_GFX_ENABLE_SDLGPU=ON"};
+            std::vector<std::string> args = withPayload({"cmake", "-S", pathUtf8(repo), "-B",
+                                                         pathUtf8(repo / "build" / "game"), "-G", "Ninja",
+                                                         "-DCMAKE_BUILD_TYPE=Release", "-DDQ8_LINK_GENERATED=ON",
+                                                         "-DDQ8_LINK_OVERLAYS=ON", "-DDQ8_GFX_ENABLE_SDLGPU=ON"});
 #if defined(__APPLE__)
             // The app bundle the build makes starts the game from these.
             args.push_back("-DDQ8_MACOS_ELF=" + pathUtf8(extracted / kVersion));
             args.push_back("-DDQ8_MACOS_ISO=" + pathUtf8(options.disc));
 #elif defined(_WIN32)
-            // Windows takes SDL3 and FFmpeg from vcpkg (wiki: Building).
-            if (const char *vcpkg = SDL_getenv("VCPKG_ROOT")) {
+            // Without a payload, Windows takes SDL3 and FFmpeg from vcpkg (wiki: Building).
+            if (const char *vcpkg = payload ? nullptr : SDL_getenv("VCPKG_ROOT")) {
                 const std::filesystem::path toolchain =
                     utf8Path(vcpkg) / "scripts" / "buildsystems" / "vcpkg.cmake";
                 std::error_code toolchainError;

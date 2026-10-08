@@ -113,7 +113,8 @@ void onInterrupt(int) { g_interrupted = 1; }
 
 // The window's build, without the window: progress goes to stdout. Ctrl+C or
 // SIGTERM cancel it like the window's button, so ninja does not outlive it.
-int headlessBuild(const std::filesystem::path &repo, const LauncherConfig &config) {
+int headlessBuild(const std::optional<std::filesystem::path> &checkout, const std::optional<Payload> &payload,
+                  const LauncherConfig &config) {
     std::signal(SIGINT, onInterrupt);
     std::signal(SIGTERM, onInterrupt);
     if (config.disc.empty()) {
@@ -122,12 +123,17 @@ int headlessBuild(const std::filesystem::path &repo, const LauncherConfig &confi
     }
     Pipeline pipeline;
     PipelineOptions options;
-    options.repo = repo;
+    options.workspace = utf8Path(!config.workspace.empty() ? config.workspace
+                                 : payload                 ? defaultGamesFolder()
+                                                           : pathUtf8(checkout->parent_path()));
+    options.repo = payload ? unpackedSource(options.workspace) : *checkout;
+    options.payload = payload;
     options.disc = utf8Path(config.disc);
-    options.workspace = utf8Path(config.workspace.empty() ? pathUtf8(repo.parent_path()) : config.workspace);
     options.jobs = config.jobs > 0 ? config.jobs : defaultJobs();
-    std::printf("[launcher] building into %s with %d jobs\n", pathUtf8(options.workspace).c_str(), options.jobs);
-    pipeline.start(options, ChildEnvironment{extraToolDirs(), {}});
+    std::printf("[launcher] building into %s with %d jobs%s\n", pathUtf8(options.workspace).c_str(), options.jobs,
+                payload ? (", from release " + payload->version).c_str() : "");
+    pipeline.start(options, payload ? payloadEnvironment(*payload, options.repo)
+                                    : ChildEnvironment{extraToolDirs(), {}});
     std::array<StageState::Status, kStageCount> shown{};
     Uint64 lastProgress = 0;
     do {
@@ -166,7 +172,7 @@ int headlessBuild(const std::filesystem::path &repo, const LauncherConfig &confi
             std::printf("  %s\n", line.c_str());
         return 1;
     }
-    std::printf("[launcher] ready: %s\n", pathUtf8(gamePath(repo)).c_str());
+    std::printf("[launcher] ready: %s\n", pathUtf8(gamePath(options.repo)).c_str());
     return 0;
 }
 
@@ -222,14 +228,16 @@ int main(int argc, char **argv) {
     const bool previewing = smoke || !previewDir.empty() || snapshot;
 
     SDL_SetAppMetadata("DQ8Recomp Launcher", "1.0", "org.dq8recomp.launcher");
+    // A release builds from its payload; --repo picks a checkout over it.
+    const std::optional<Payload> payload = repoArg.empty() ? findPayload() : std::nullopt;
     if (build) {
         SDL_Init(0);
-        const std::optional<std::filesystem::path> repo = findRepo(repoArg);
-        if (!repo) {
+        const std::optional<std::filesystem::path> repo = payload ? std::nullopt : findRepo(repoArg);
+        if (!repo && !payload) {
             std::fprintf(stderr, "not inside a DQ8Recomp source tree; pass --repo\n");
             return 2;
         }
-        const int status = headlessBuild(*repo, overrides);
+        const int status = headlessBuild(repo, payload, overrides);
         SDL_Quit();
         return status;
     }
@@ -268,12 +276,12 @@ int main(int argc, char **argv) {
         ui::applyStyle(density > 0.0f && scale > 0.0f ? std::max(1.0f, scale / density) : 1.0f);
     }
 
-    std::optional<std::filesystem::path> repo = findRepo(repoArg);
-    if (!repo && previewing)
+    std::optional<std::filesystem::path> repo = payload ? std::nullopt : findRepo(repoArg);
+    if (!repo && !payload && previewing)
         repo = std::filesystem::current_path();
     std::optional<LauncherApp> app;
-    if (repo)
-        app.emplace(*repo, window, overrides, !snapshot);
+    if (repo || payload)
+        app.emplace(repo.value_or(std::filesystem::path()), payload, window, overrides, !snapshot);
 
     int pixelWidth = 0, pixelHeight = 0;
     SDL_GetWindowSizeInPixels(window, &pixelWidth, &pixelHeight);
