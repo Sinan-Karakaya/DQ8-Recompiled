@@ -9,9 +9,12 @@
 #include <imgui_internal.h>
 
 #include <algorithm>
+#include <cctype>
+#include <cfloat>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <fstream>
 #include <iterator>
 #include <sstream>
@@ -155,6 +158,26 @@ void commandWell(const std::string &command, double &copiedAt, double now) {
         SDL_SetClipboardText(command.c_str());
         copiedAt = now;
     }
+}
+
+// SDL_OpenURL takes a URL: a path's spaces and other characters are escaped,
+// and Windows drives get the leading slash file URLs need.
+std::string fileUrl(const std::filesystem::path &path) {
+    std::string generic = pathUtf8(path);
+    std::replace(generic.begin(), generic.end(), '\\', '/');
+    if (generic.empty() || generic.front() != '/')
+        generic.insert(generic.begin(), '/');
+    std::string url = "file://";
+    for (const unsigned char c : generic) {
+        if (std::isalnum(c) || std::strchr("-._~/:", c) != nullptr) {
+            url += static_cast<char>(c);
+        } else {
+            char escaped[4];
+            std::snprintf(escaped, sizeof(escaped), "%%%02X", c);
+            url += escaped;
+        }
+    }
+    return url;
 }
 
 void dashedRect(ImDrawList *list, ImVec2 min, ImVec2 max, ImU32 tint, float dash, float phase, float thickness) {
@@ -570,6 +593,9 @@ void LauncherApp::showPreview(Preview preview) {
     m_previewStages = {};
     m_previewError.clear();
     m_previewLog.clear();
+    m_logText.clear();
+    m_logTextVersion = UINT64_MAX;
+    m_revealLog = true;
     const auto done = [&](Stage stage, double seconds, const char *detail) {
         StageState &state = m_previewStages[static_cast<size_t>(stage)];
         state.status = StageState::Status::Done;
@@ -589,6 +615,7 @@ void LauncherApp::showPreview(Preview preview) {
     case Preview::Building:
     case Preview::BuildFailed: {
         m_page = Page::Build;
+        m_showLog = true;
         // A real first build on an M1 Pro at 10 jobs, 4 minutes into compiling.
         done(Stage::CheckDisc, 24.0, "4.18 GB checked");
         done(Stage::ExtractDisc, 4.0, "4.18 GB copied");
@@ -674,9 +701,16 @@ void LauncherApp::draw() {
         if (m_live && m_persist)
             saveConfig(m_config);
     }
-    // A finished build moves on to Play by itself.
+    // A finished build moves on to Play by itself; a failed one shows its log,
+    // with what it takes to report it.
     if (m_live && m_page == Page::Build && m_pipeline.succeeded() && !m_pipeline.running())
         m_page = Page::Play;
+    if (m_live) {
+        const bool running = m_pipeline.running();
+        if (m_buildWasRunning && !running && !m_pipeline.succeeded())
+            m_showLog = m_revealLog = true;
+        m_buildWasRunning = running;
+    }
 
     drawBackground();
     const ImVec2 display = ImGui::GetIO().DisplaySize;
@@ -809,7 +843,7 @@ void LauncherApp::drawFooter() {
         if (!pressed)
             continue;
         switch (action.id) {
-        case 0: m_showLog = !m_showLog; break;
+        case 0: m_showLog = m_revealLog = !m_showLog; break;
         case 1:
             if (m_live)
                 m_pipeline.cancel();
@@ -1168,22 +1202,104 @@ void LauncherApp::drawBuildPage() {
     (void)started;
     if (m_showLog || (!m_live && !m_previewLog.empty())) {
         ImGui::Dummy(ImVec2(0.0f, em(0.3f)));
-        const std::vector<std::string> lines = m_live ? m_pipeline.log(300) : m_previewLog;
+        drawLogTools();
+        const float height = std::max(em(12.0f), ImGui::GetContentRegionAvail().y - em(0.2f));
         ImGui::PushStyleColor(ImGuiCol_ChildBg, color(IM_COL32(0, 0, 8, 150)));
-        ImGui::BeginChild("##log", ImVec2(0.0f, std::max(em(5.0f), ImGui::GetContentRegionAvail().y - em(0.2f))),
-                          ImGuiChildFlags_Borders);
+        ImGui::PushStyleColor(ImGuiCol_FrameBg, color(IM_COL32(0, 0, 8, 150)));
         ImGui::PushStyleColor(ImGuiCol_Text, color(palette::kTextMuted));
-        // Wrapped: the file a line names is at its end.
-        ImGui::PushTextWrapPos(0.0f);
-        for (const std::string &line : lines)
-            ImGui::TextUnformatted(line.c_str());
-        ImGui::PopTextWrapPos();
-        ImGui::PopStyleColor();
-        if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - em(2.0f))
+        if (running) {
+            // While it grows, the log follows its end; text moving under a
+            // selection would make one useless, so that waits for the build to stop.
+            const std::vector<std::string> lines = m_live ? m_pipeline.log(300) : m_previewLog;
+            ImGui::BeginChild("##log", ImVec2(0.0f, height), ImGuiChildFlags_Borders);
+            // Wrapped: the file a line names is at its end.
+            ImGui::PushTextWrapPos(0.0f);
+            for (const std::string &line : lines)
+                ImGui::TextUnformatted(line.c_str());
+            ImGui::PopTextWrapPos();
+            if (ImGui::GetScrollY() >= ImGui::GetScrollMaxY() - em(2.0f))
+                ImGui::SetScrollHereY(1.0f);
+            ImGui::EndChild();
+        } else {
+            const uint64_t version = m_live ? m_pipeline.logVersion() : 0u;
+            if (!m_logActive && (version != m_logTextVersion || m_logText.empty())) {
+                m_logText.clear();
+                for (const std::string &line : m_live ? m_pipeline.log(1000) : m_previewLog)
+                    m_logText += line + '\n';
+                m_logTextVersion = version;
+                // Opens at the end, where a failure says why.
+                ImGui::SetNextWindowScroll(ImVec2(-1.0f, FLT_MAX));
+            }
+            // Its frame takes the border the live view's child has.
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, ImGui::GetStyle().ChildBorderSize);
+            ImGui::InputTextMultiline("##log", m_logText.data(), m_logText.size() + 1u, ImVec2(-FLT_MIN, height),
+                                      ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_WordWrap);
+            ImGui::PopStyleVar();
+            m_logActive = ImGui::IsItemActive();
+        }
+        ImGui::PopStyleColor(3);
+        if (m_revealLog) {
             ImGui::SetScrollHereY(1.0f);
-        ImGui::EndChild();
-        ImGui::PopStyleColor();
+            m_revealLog = false;
+        }
     }
+}
+
+void LauncherApp::drawLogTools() {
+    const bool copied = m_time - m_logCopiedAt < 2.0;
+    if (ui::iconButton(copied ? "Copied" : "Copy log", copied ? Icon::Check : Icon::Copy) && m_live) {
+        SDL_SetClipboardText(bugReport().c_str());
+        m_logCopiedAt = m_time;
+    }
+    ImGui::SameLine(0.0f, em(0.6f));
+    // The whole log, for attaching to an issue.
+    if (ui::iconButton("Open log folder", Icon::Folder) && m_live)
+        SDL_OpenURL(fileUrl(utf8Path(m_config.workspace)).c_str());
+    ImGui::SameLine(0.0f, em(0.6f));
+    if (ui::iconButton("Report a problem", Icon::Link) && m_live)
+        SDL_OpenURL("https://github.com/Sinan-Karakaya/DQ8-Recompiled/issues/new");
+    ImGui::Dummy(ImVec2(0.0f, em(0.2f)));
+}
+
+std::string LauncherApp::bugReport() const {
+#if defined(__aarch64__) || defined(_M_ARM64)
+    constexpr const char *kArch = "arm64";
+#else
+    constexpr const char *kArch = "x86-64";
+#endif
+    std::ostringstream report;
+    report << "DQ8Recomp launcher, " << (m_payload ? "release " + m_payload->version : std::string("from a checkout"))
+           << "\nSystem: " << SDL_GetPlatform() << ' ' << kArch << ", " << SDL_GetNumLogicalCPUCores()
+           << " logical cores, " << SDL_GetSystemRAM() << " MB of memory, " << m_config.jobs << " compile jobs\n";
+    {
+        std::lock_guard lock(m_toolsMutex);
+        if (m_tools) {
+            report << "Tools:";
+            for (const ToolCheck &tool : m_tools->tools)
+                report << ' ' << tool.name << ' ' << (tool.found ? tool.version : std::string("missing"))
+                       << (tool.problem.empty() ? "" : " (" + tool.problem + ")") << ';';
+            report << '\n';
+        }
+    }
+    const std::string error = m_pipeline.error();
+    if (!error.empty())
+        report << "Error: " << error << '\n';
+    const auto stages = m_pipeline.stages();
+    for (size_t i = 0; i < kStageCount; ++i) {
+        const StageState &stage = stages[i];
+        report << "- " << stageTitle(static_cast<Stage>(i)) << ": " << statusName(stage.status);
+        if (!stage.detail.empty())
+            report << ", " << stage.detail;
+        if (stage.seconds >= 1.0)
+            report << ", " << duration(stage.seconds);
+        report << '\n';
+    }
+    // An issue takes 65,536 characters; the whole log is launcher.log.
+    report << "\nThe end of launcher.log:\n```\n";
+    for (const std::string &line : m_pipeline.log(200))
+        report << line << '\n';
+    report << "```\n";
+    return report.str();
 }
 
 void LauncherApp::drawPlayPage() {

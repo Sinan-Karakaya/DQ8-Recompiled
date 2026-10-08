@@ -74,8 +74,12 @@ private:
     void drawToolsPage();
     void drawOptionsPage();
     void drawBuildPage();
+    void drawLogTools();
     void drawPlayPage();
     void drawFooter();
+    // What a bug report needs: the launcher, the machine, the steps and the
+    // log's end, ready to paste into an issue.
+    std::string bugReport() const;
 
     // Where the build runs and the game is started from.
     std::filesystem::path buildRepo() const;
@@ -135,6 +139,15 @@ private:
     // Build page.
     Pipeline m_pipeline;
     bool m_showLog = false;
+    // The page scrolls down to the log once it opens, as the steps fill it.
+    bool m_revealLog = false;
+    bool m_buildWasRunning = false;
+    // The stopped build's log as one selectable text, rebuilt when the log
+    // changes and not while the player is selecting in it.
+    std::string m_logText;
+    uint64_t m_logTextVersion = UINT64_MAX;
+    bool m_logActive = false;
+    double m_logCopiedAt = -10.0;
     std::array<StageState, kStageCount> m_previewStages{};
     std::string m_previewError;
     std::vector<std::string> m_previewLog;

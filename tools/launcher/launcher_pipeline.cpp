@@ -169,6 +169,17 @@ const char *stageTitle(Stage stage) {
     return "";
 }
 
+const char *statusName(StageState::Status status) {
+    switch (status) {
+    case StageState::Status::Waiting: return "waiting";
+    case StageState::Status::Running: return "running";
+    case StageState::Status::Done: return "done";
+    case StageState::Status::Failed: return "failed";
+    case StageState::Status::Skipped: return "already done";
+    }
+    return "";
+}
+
 std::filesystem::path recompilerPath(const std::filesystem::path &repo) {
     return repo / "build" / "ps2recomp-standalone" / "ps2xRecomp" / (std::string("ps2_recomp") + kExe);
 }
@@ -350,6 +361,7 @@ void Pipeline::start(const PipelineOptions &options, const ChildEnvironment &env
         m_log.clear();
         m_error.clear();
     }
+    ++m_logVersion;
     m_cancel = false;
     m_succeeded = false;
     m_running = true;
@@ -393,6 +405,7 @@ void Pipeline::line(const std::string &text) {
     m_log.push_back(text);
     if (m_log.size() > kLogLines)
         m_log.pop_front();
+    ++m_logVersion;
     if (!m_logFile.empty()) {
         std::ofstream file(m_logFile, std::ios::app);
         file << text << '\n';
