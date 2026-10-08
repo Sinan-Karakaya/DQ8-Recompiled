@@ -34,9 +34,9 @@ struct StageState {
     uint64_t startedMs = 0; // SDL_GetTicks() when it began, for the time so far
 };
 
-// What compiling one step costs, in units of a small file (about a second).
-// Only the translated functions vary much: time grows with about the cube
-// of their size, and 15 of 14k files take ~85% of the CPU time.
+// What compiling one step costs, in units of a small file (about 0.2 s). Only
+// translated functions vary much: none passes a few seconds now, but time grows
+// with about the cube of their size, and a 10.8 MB one once took an hour.
 double compileCost(const std::string &file, uint64_t bytes);
 constexpr double kLargeCompileCost = 100.0;
 

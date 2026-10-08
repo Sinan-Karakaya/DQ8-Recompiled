@@ -42,7 +42,7 @@ Python, SDL3, FFmpeg and the libraries the build would fetch) except a C++
 compiler, which no release may include. If yours is missing, the launcher
 installs it through your system: Apple's Command Line Tools on macOS, Visual
 Studio Build Tools on Windows, your distribution's packages on Linux. The first
-build takes about an hour.
+build takes about ten minutes on a recent computer, longer with fewer cores.
 
 From a checkout instead, it uses the tools on your machine, and can install what
 is missing:

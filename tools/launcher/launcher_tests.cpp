@@ -185,11 +185,12 @@ void progressAndVersions() {
     require(parseVersion("1.12.1") == std::vector<int>({1, 12, 1}), "a bare version");
 }
 
-// The weights behind the compile bar: measured, a 10.8 MB function takes about
-// an hour and a 2.6 MB one under a minute, against about a second for most.
+// The weights behind the compile bar: measured before the function map was
+// fixed, a 10.8 MB function took about an hour and a 2.6 MB one under a minute,
+// against a fraction of a second for most.
 void compileCosts() {
     require(compileCost("FUN_00100000_0x100000.cpp", 4000u) < 1.01, "a small function costs one unit");
-    require(compileCost("FUN_00370c30_0x370c30.cpp", 10'772'527u) > 10000.0, "the largest one, about an hour");
+    require(compileCost("FUN_00370c30_0x370c30.cpp", 10'772'527u) > 10000.0, "10.8 MB, about an hour");
     require(compileCost("FUN_00389498_0x389498.cpp", 2'580'000u) >= kLargeCompileCost, "2.6 MB counts as large");
     require(compileCost("register_functions.cpp", 10'634'706u) == 1.0, "a table is quick whatever its size");
 

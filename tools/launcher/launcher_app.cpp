@@ -261,9 +261,9 @@ std::string defaultGamesFolder() {
 
 int defaultJobs() {
     const int cores = std::max(1, SDL_GetNumLogicalCPUCores());
-    // Clang peaks at 1.5 GB on the largest translated function (measured over
-    // a full build), so allow 2 GB a job.
-    const int memory = std::max(1, SDL_GetSystemRAM() / 2048);
+    // Clang peaks at 0.5 GB on the heaviest file (measured over a full build),
+    // so allow 1 GB a job.
+    const int memory = std::max(1, SDL_GetSystemRAM() / 1024);
     return std::clamp(std::min(cores, memory), 1, cores);
 }
 
@@ -580,25 +580,25 @@ void LauncherApp::showPreview(Preview preview) {
     case Preview::Building:
     case Preview::BuildFailed: {
         m_page = Page::Build;
-        // A real first build on an M-series Mac, 25 minutes into compiling.
-        done(Stage::CheckDisc, 23.0, "4.18 GB checked");
+        // A real first build on an M1 Pro at 10 jobs, 4 minutes into compiling.
+        done(Stage::CheckDisc, 24.0, "4.18 GB checked");
         done(Stage::ExtractDisc, 4.0, "4.18 GB copied");
         done(Stage::UnpackSource, 3.0, "Version 1.0");
-        done(Stage::BuildRecompiler, 58.0, "123 of 123");
-        done(Stage::TranslateGame, 6.0, "12,446 files");
-        done(Stage::ConfigureGame, 34.0, "Ready");
+        done(Stage::BuildRecompiler, 21.0, "123 of 123");
+        done(Stage::TranslateGame, 5.0, "12,442 files");
+        done(Stage::ConfigureGame, 36.0, "Ready");
         StageState &compile = m_previewStages[static_cast<size_t>(Stage::CompileGame)];
         compile.status = preview == Preview::Building ? StageState::Status::Running : StageState::Status::Failed;
-        compile.progress = 0.14;
-        compile.detail = "10,972 of 14,253  15 large files left";
-        compile.seconds = 1500.0;
-        compile.remaining = -1.0;
+        compile.progress = 0.47;
+        compile.detail = "6,647 of 14,249";
+        compile.seconds = 222.0;
+        compile.remaining = preview == Preview::Building ? 214.0 : -1.0;
         const std::string object = "Building CXX object src/runtime/CMakeFiles/dq8_generated.dir/__/__/build/generated/"
                                    "SLUS_212.07/";
-        m_previewLog = {"[10969/14253] " + object + "FUN_00378db0_0x378db0.cpp.o",
-                        "[10970/14253] " + object + "FUN_00378e90_0x378e90.cpp.o",
-                        "[10971/14253] " + object + "FUN_00379090_0x379090.cpp.o",
-                        "[10972/14253] " + object + "FUN_003791d0_0x3791d0.cpp.o"};
+        m_previewLog = {"[6644/14249] " + object + "FUN_00255fe0_0x255fe0.cpp.o",
+                        "[6645/14249] " + object + "FUN_00256050_0x256050.cpp.o",
+                        "[6646/14249] " + object + "FUN_00255b70_0x255b70.cpp.o",
+                        "[6647/14249] " + object + "FUN_00256090_0x256090.cpp.o"};
         if (preview == Preview::BuildFailed) {
             m_previewLog.push_back("clang++: error: unable to execute command: Killed");
             m_previewLog.push_back("ninja: build stopped: subcommand failed.");
@@ -1027,8 +1027,8 @@ void LauncherApp::drawOptionsPage() {
     }
     ui::sectionHeader("Build");
     if (ui::beginSettings("build")) {
-        ui::settingRow("Compile jobs", "More build faster but take more memory. The first build takes an hour or "
-                                       "more, mostly a few very large files; later ones only redo what changed.");
+        ui::settingRow("Compile jobs", "More build faster but take more memory. The first build takes about 10 "
+                                       "minutes with 10 jobs on a recent computer; later ones only redo what changed.");
         const int cores = std::max(1, SDL_GetNumLogicalCPUCores());
         int jobs = std::clamp(m_config.jobs, 1, cores);
         if (ImGui::SliderInt("##jobs", &jobs, 1, cores)) {

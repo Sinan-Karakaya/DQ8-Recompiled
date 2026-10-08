@@ -432,11 +432,12 @@ bool Pipeline::command(Stage stage, const std::vector<std::string> &args, Compil
     if (!args.empty() && (args[0] == "cmake" || args[0] == "ninja"))
         run = withCompilerEnvironment(args, m_logFile.parent_path(), m_environment);
 #endif
-    // The rate is measured from a mark: the first step, then each large step,
+    // The rate is measured from a mark: the first step, the step 5% in (past
+    // the precompiled headers and slowest libraries), then each large step,
     // after which only small ones remain at a steady pace.
     auto mark = Clock::now();
     uint64_t markDone = 0u, lastTotal = 0u;
-    bool counting = false, upToDate = false, planChecked = false;
+    bool counting = false, upToDate = false, planChecked = false, warmedUp = false;
     // Steps other than translated files (libraries, links) count one unit each.
     double otherDone = 0.0;
     size_t pendingAtStart = plan ? plan->pending : 0u;
@@ -460,6 +461,11 @@ bool Pipeline::command(Stage stage, const std::vector<std::string> &args, Compil
             const auto now = Clock::now();
             if (!counting) {
                 counting = true;
+                mark = now;
+                markDone = done;
+            }
+            if (!warmedUp && total > 2u && done * 20u >= total) {
+                warmedUp = true;
                 mark = now;
                 markDone = done;
             }
@@ -500,7 +506,8 @@ bool Pipeline::command(Stage stage, const std::vector<std::string> &args, Compil
                 state.detail += "  " + std::to_string(largeLeft) + (largeLeft == 1u ? " large file" : " large files") +
                                 " left";
             // A count says nothing about how long the large files take.
-            state.remaining = rate > 0.0 && largeLeft == 0u ? static_cast<double>(total - done) / rate : -1.0;
+            state.remaining =
+                rate > 0.0 && largeLeft == 0u && warmedUp ? static_cast<double>(total - done) / rate : -1.0;
         },
         m_cancel, error);
     if (code == 0) {
