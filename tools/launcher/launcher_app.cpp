@@ -373,24 +373,25 @@ void LauncherApp::runInstall(const InstallAction &action) {
     }
     m_install->finished = false;
     m_waitingForInstaller = false;
-    // Detached: closing the window must not wait for a long installer.
-    std::thread([state = m_install, action, environment = childEnvironment()] {
+    // Detached, and writing to a file rather than to us: closing the window
+    // neither waits for a long installer nor cuts it off halfway.
+    const std::filesystem::path log = configPath().parent_path() / "install.log";
+    std::thread([state = m_install, action, environment = childEnvironment(), log] {
         std::string error;
-        const std::atomic<bool> never{false};
-        const int code = runProcess(
-            action.command, environment,
-            [&state](const std::string &text) {
-                std::lock_guard lock(state->mutex);
-                state->line = text.size() > 96u ? text.substr(0, 93u) + "..." : text;
-            },
-            never, error);
+        const int code = runProcessToFile(action.command, environment, log,
+                                          [&state](const std::string &text) {
+                                              std::lock_guard lock(state->mutex);
+                                              state->line = text.size() > 96u ? text.substr(0, 93u) + "..." : text;
+                                          },
+                                          error);
         {
             std::lock_guard lock(state->mutex);
             // xcode-select answers 1 when the tools are already there.
             if (code != 0 && !action.installerRunsOnItsOwn)
                 state->error = !error.empty() ? error
                                               : "The installer stopped with code " + std::to_string(code) +
-                                                    "; its last line is above.";
+                                                    (state->line.empty() ? std::string() : ": " + state->line) +
+                                                    ". All it wrote is in " + pathUtf8(log) + ".";
         }
         state->openedInstaller = action.installerRunsOnItsOwn && code == 0;
         state->running = false;

@@ -322,6 +322,33 @@ void childProcess() {
     require(std::chrono::steady_clock::now() - started < std::chrono::seconds(10), "without waiting for the child");
 #endif
 }
+
+// Installers write to a file, which outlives the launcher, rather than a pipe.
+void childProcessToFile() {
+    const std::filesystem::path log = std::filesystem::temp_directory_path() / "dq8-launcher-log" / "install.log";
+    std::error_code ec;
+    std::filesystem::remove_all(log.parent_path(), ec);
+#if defined(_WIN32)
+    const std::vector<std::string> command = {"cmd", "/c", "echo one& echo two& exit /b 3"};
+#else
+    const std::vector<std::string> command = {"sh", "-c", "echo one; sleep 0.3; echo two 1>&2; exit 3"};
+#endif
+    std::vector<std::string> lines;
+    std::string error;
+    const int code = runProcessToFile(command, ChildEnvironment{}, log,
+                                      [&](const std::string &line) { lines.push_back(line); }, error);
+    require(code == 3, "the exit code comes back with the output in a file: " + error);
+    require(lines.size() == 2u && lines[0] == "one" && lines[1] == "two", "the file's lines, in order");
+    {
+        std::ifstream file(log, std::ios::binary);
+        const std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        require(text.find("one") != std::string::npos && text.find("two") != std::string::npos,
+                "and the file keeps them");
+    }
+    require(runProcessToFile({"dq8-no-such-command"}, ChildEnvironment{}, log, {}, error) != 0,
+            "a missing command fails");
+    std::filesystem::remove_all(log.parent_path(), ec);
+}
 } // namespace
 
 int main() try {
@@ -334,6 +361,7 @@ int main() try {
     payloadUnpacking();
     builtMarker();
     childProcess();
+    childProcessToFile();
     std::puts("PASS: launcher hashing, ISO reader, JSON, progress, compile costs, versions and child processes");
     return 0;
 } catch (const std::exception &error) {

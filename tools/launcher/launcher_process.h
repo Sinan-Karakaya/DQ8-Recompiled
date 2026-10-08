@@ -5,6 +5,7 @@
 #include <SDL3/SDL.h>
 
 #include <atomic>
+#include <filesystem>
 #include <functional>
 #include <string>
 #include <utility>
@@ -26,6 +27,13 @@ struct ChildEnvironment {
 int runProcess(const std::vector<std::string> &args, const ChildEnvironment &environment,
                const std::function<void(const std::string &)> &onLine, const std::atomic<bool> &cancel,
                std::string &error);
+
+// Like runProcess, but the child writes to `log`, and onLine gets the file's
+// lines as they land. With no pipe back to the launcher, the child carries on
+// unharmed when the launcher exits: installers must not stop halfway.
+int runProcessToFile(const std::vector<std::string> &args, const ChildEnvironment &environment,
+                     const std::filesystem::path &log, const std::function<void(const std::string &)> &onLine,
+                     std::string &error);
 
 // The first line of `args`'s output, for version probes; empty on failure.
 std::string probeOutput(const std::vector<std::string> &args, const ChildEnvironment &environment);
