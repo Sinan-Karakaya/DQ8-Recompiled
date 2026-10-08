@@ -280,8 +280,10 @@ int main(int argc, char **argv) {
     if (!repo && !payload && previewing)
         repo = std::filesystem::current_path();
     std::optional<LauncherApp> app;
+    // Only a player's window saves: the smoke test and the screenshots must
+    // leave launcher.ini and the game's settings alone.
     if (repo || payload)
-        app.emplace(repo.value_or(std::filesystem::path()), payload, window, overrides, !snapshot);
+        app.emplace(repo.value_or(std::filesystem::path()), payload, window, overrides, !previewing);
 
     int pixelWidth = 0, pixelHeight = 0;
     SDL_GetWindowSizeInPixels(window, &pixelWidth, &pixelHeight);
