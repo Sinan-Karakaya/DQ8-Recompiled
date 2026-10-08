@@ -373,6 +373,60 @@ void childProcessToFile() {
     require(wrote, "and the child still writes its line");
     std::filesystem::remove_all(log.parent_path(), ec);
 }
+
+// A child gets one PATH, the extra directories before the launcher's own, and
+// what the launcher sets replaces what it has, however it is spelled.
+void childEnvironment() {
+    const char *own = SDL_getenv_unsafe("PATH");
+    require(own != nullptr, "the tests have a PATH");
+    const std::string path = own;
+#if defined(_WIN32)
+    // A player's Windows spells it Path, which SDL, unlike Windows, tells
+    // apart from PATH; a runner's may spell it either way.
+    SDL_unsetenv_unsafe("PATH");
+    SDL_setenv_unsafe("Path", path.c_str(), 1);
+    SDL_setenv_unsafe("Dq8_Launcher_Test", "one", 1);
+    const std::string extra = "C:\\dq8-extra";
+    const std::string expected = extra + ";" + path;
+    const std::vector<std::string> printEnvironment = {"cmd", "/d", "/c", "set"};
+    const auto is = [](const std::string &name, const char *wanted) {
+        return SDL_strcasecmp(name.c_str(), wanted) == 0;
+    };
+#else
+    const std::string extra = "/dq8-extra";
+    const std::string expected = extra + ":" + path;
+    const std::vector<std::string> printEnvironment = {"sh", "-c", "env"};
+    const auto is = [](const std::string &name, const char *wanted) { return name == wanted; };
+#endif
+    const ChildEnvironment environment{{extra}, {{"DQ8_LAUNCHER_TEST", "two"}}};
+    std::vector<std::string> paths, tests;
+    std::string error;
+    const std::atomic<bool> never{false};
+    require(runProcess(printEnvironment, environment,
+                       [&](const std::string &line) {
+                           const size_t equals = line.find('=');
+                           if (equals == std::string::npos)
+                               return;
+                           const std::string name = line.substr(0, equals);
+                           if (is(name, "PATH"))
+                               paths.push_back(line.substr(equals + 1u));
+                           if (is(name, "DQ8_LAUNCHER_TEST"))
+                               tests.push_back(line.substr(equals + 1u));
+                       },
+                       never, error) == 0,
+            "the child prints its environment: " + error);
+    require(paths.size() == 1u, "the child has one PATH, not " + std::to_string(paths.size()));
+    require(paths[0] == expected, "the extra directories, then the launcher's own PATH: " + paths[0]);
+    require(tests.size() == 1u && tests[0] == "two", "a variable the launcher sets reaches the child once");
+#if defined(_WIN32)
+    // How vcvars64.bat finds the Windows SDK. With only the extra directories
+    // in PATH it could not, and CMake then found cl.exe but neither rc nor mt.
+    require(runProcess({"cmd", "/d", "/c", "reg", "query", "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion", "/v",
+                        "ProgramFilesDir"},
+                       environment, {}, never, error) == 0,
+            "cmd.exe finds Windows' own commands: " + error);
+#endif
+}
 } // namespace
 
 int main() try {
@@ -386,7 +440,9 @@ int main() try {
     builtMarker();
     childProcess();
     childProcessToFile();
-    std::puts("PASS: launcher hashing, ISO reader, JSON, progress, compile costs, versions and child processes");
+    childEnvironment();
+    std::puts("PASS: launcher hashing, ISO reader, JSON, progress, compile costs, versions, child processes and "
+              "their environment");
     return 0;
 } catch (const std::exception &error) {
     std::fprintf(stderr, "FAIL: %s\n", error.what());
