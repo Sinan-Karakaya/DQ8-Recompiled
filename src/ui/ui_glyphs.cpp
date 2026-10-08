@@ -442,6 +442,36 @@ void drawIcon(ImDrawList *list, Icon kind, ImVec2 c, float size, ImU32 color) {
         list->PathStroke(color, t);
         list->AddTriangleFilled(at(-0.42f, -0.36f), at(-0.12f, -0.26f), at(-0.36f, -0.06f), color);
         break;
+    case Icon::Disc:
+        list->AddCircle(c, s * 0.42f, color, 40, t);
+        list->AddCircle(c, s * 0.11f, color, 16, t);
+        list->PathArcTo(c, s * 0.27f, -2.5f, -1.4f);
+        list->PathStroke(color, t * 0.8f);
+        break;
+    case Icon::Wrench:
+        list->AddLine(at(-0.36f, 0.36f), at(0.06f, -0.06f), color, t * 1.7f);
+        list->PathArcTo(at(0.17f, -0.17f), s * 0.2f, 0.4f, 5.1f);
+        list->PathStroke(color, t * 1.3f);
+        break;
+    case Icon::Gear:
+        list->AddCircle(c, s * 0.24f, color, 28, t * 1.2f);
+        list->AddCircle(c, s * 0.08f, color, 12, t);
+        for (int tooth = 0; tooth < 8; ++tooth) {
+            const float a = static_cast<float>(tooth) * 0.785398f;
+            list->AddLine(ImVec2(c.x + std::cos(a) * s * 0.3f, c.y + std::sin(a) * s * 0.3f),
+                          ImVec2(c.x + std::cos(a) * s * 0.43f, c.y + std::sin(a) * s * 0.43f), color, t * 1.7f);
+        }
+        break;
+    case Icon::Copy:
+        // Two sheets; the back one's edges stop where the front one hides them.
+        list->AddRect(at(-0.12f, -0.12f), at(0.38f, 0.4f), color, s * 0.06f, t);
+        list->PathLineTo(at(-0.12f, 0.14f));
+        list->PathLineTo(at(-0.38f, 0.14f));
+        list->PathLineTo(at(-0.38f, -0.38f));
+        list->PathLineTo(at(0.12f, -0.38f));
+        list->PathLineTo(at(0.12f, -0.12f));
+        list->PathStroke(color, t);
+        break;
     }
 }
 
