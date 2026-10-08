@@ -1,23 +1,27 @@
 name: Release
 
 # One download per platform: the launcher with everything the game build needs
-# except a C++ compiler (tools/launcher/payload.py). A version tag drafts a
-# GitHub release with them; publishing it stays a person's decision.
+# except a C++ compiler (tools/launcher/payload.py). Every push to main is
+# released, named by its commit's short hash. Pull requests that touch the
+# launcher package everything and assemble the release without publishing it.
 on:
   push:
-    tags: ['v*']
+    branches: [main]
   pull_request:
     paths:
       - 'tools/launcher/**'
       - '.github/workflows/release.yml'
+      - '.github/release-notes.md'
   workflow_dispatch:
 
 permissions:
   contents: read
 
+# A newer push to a pull request replaces its run. On main, a release in
+# progress is never cut off; a newer push replaces one still waiting to start.
 concurrency:
   group: release-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   package:
@@ -28,14 +32,22 @@ jobs:
         include:
           - name: macOS ARM64
             os: macos-15
-            archive: DQ8Recomp-macOS-arm64.zip
-          # The oldest supported runner, so the launcher runs on older glibc.
+            suffix: macOS-arm64.zip
+          - name: macOS x86-64
+            os: macos-15-intel
+            suffix: macOS-x86_64.zip
+          # The oldest supported runners, so the launcher runs on older glibc.
+          # One of them also publishes the source and FFmpeg's.
           - name: Linux x86-64
             os: ubuntu-22.04
-            archive: DQ8Recomp-Linux-x86_64.tar.gz
+            suffix: Linux-x86_64.tar.gz
+            sources: true
+          - name: Linux ARM64
+            os: ubuntu-22.04-arm
+            suffix: Linux-arm64.tar.gz
           - name: Windows x86-64
             os: windows-2025
-            archive: DQ8Recomp-Windows-x86_64.zip
+            suffix: Windows-x86_64.zip
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     defaults:
@@ -45,8 +57,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: recursive
-          fetch-depth: 0 # git describe names the payload
           persist-credentials: false
+
+      - name: Name the build after its commit
+        run: |
+          echo "VERSION=${GITHUB_SHA::7}" >> "$GITHUB_ENV"
+          echo "ARCHIVE=DQ8Recomp-${GITHUB_SHA::7}-${{ matrix.suffix }}" >> "$GITHUB_ENV"
 
       # SDL3's backends and raylib's window need these to build; players need
       # only the X11 and OpenGL headers, which the launcher can install.
@@ -62,7 +78,7 @@ jobs:
       - name: Build the payload and the launcher
         if: runner.os != 'Windows'
         run: |
-          python3 tools/launcher/payload.py --out build/payload
+          python3 tools/launcher/payload.py --out build/payload --version "$VERSION"
           tools="$PWD/build/payload/tools"
           "$tools/cmake/bin/cmake" -S tools/launcher -B build/launcher -G Ninja \
             -DCMAKE_BUILD_TYPE=Release -DCMAKE_MAKE_PROGRAM="$tools/ninja/bin/ninja" \
@@ -80,7 +96,7 @@ jobs:
           $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
           Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
           Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
-          python tools/launcher/payload.py --out build/payload
+          python tools/launcher/payload.py --out build/payload --version $env:VERSION
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $tools = "$PWD\build\payload\tools"
           & "$tools\cmake\bin\cmake.exe" -S tools/launcher -B build/launcher -G Ninja `
@@ -94,49 +110,98 @@ jobs:
 
       - name: Package
         run: |
-          mkdir -p dist
+          mkdir -p dist upload
           case "$RUNNER_OS" in
             macOS)
               ditto "build/launcher/DQ8Recomp Launcher.app" "dist/DQ8Recomp Launcher.app"
               ditto build/payload "dist/DQ8Recomp Launcher.app/Contents/Resources/payload"
-              (cd dist && ditto -c -k --keepParent "DQ8Recomp Launcher.app" "../${{ matrix.archive }}")
+              (cd dist && ditto -c -k --keepParent "DQ8Recomp Launcher.app" "../upload/$ARCHIVE")
               ;;
             Linux)
               mkdir -p dist/DQ8Recomp
               cp build/launcher/dq8-launcher dist/DQ8Recomp/
               cp -a build/payload dist/DQ8Recomp/payload
-              tar -C dist -czf "${{ matrix.archive }}" DQ8Recomp
+              tar -C dist -czf "upload/$ARCHIVE" DQ8Recomp
               ;;
             Windows)
               mkdir -p dist/DQ8Recomp
               cp build/launcher/dq8-launcher.exe dist/DQ8Recomp/
               cp -r build/payload dist/DQ8Recomp/payload
-              (cd dist && 7z a -tzip -mx=7 "../${{ matrix.archive }}" DQ8Recomp > /dev/null)
+              (cd dist && 7z a -tzip -mx=7 "../upload/$ARCHIVE" DQ8Recomp > /dev/null)
               ;;
           esac
-          ls -l "${{ matrix.archive }}"
+          ls -l upload
+
+      # GitHub's own source archives leave the submodules out; the payload's
+      # copy has them. FFmpeg's source goes with its LGPL libraries.
+      - name: Add the source and FFmpeg's
+        if: matrix.sources
+        run: |
+          tar -C build/payload -czf "upload/DQ8Recomp-$VERSION-source.tar.gz" \
+            --transform "s,^source,DQ8Recomp-$VERSION," source
+          cp build/payload-cache/ffmpeg-*.tar.xz upload/
+          ls -l upload
 
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: ${{ matrix.archive }}
-          path: ${{ matrix.archive }}
+          name: ${{ matrix.suffix }}
+          path: upload/
           retention-days: 14
           compression-level: 0
 
-  draft-release:
-    name: Draft the release
-    if: startsWith(github.ref, 'refs/tags/')
+  release:
+    name: Release
     needs: package
     runs-on: ubuntu-24.04
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/release-notes.md
+          sparse-checkout-cone-mode: false
+          persist-credentials: false
+
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          path: artifacts
+          path: release
           merge-multiple: true
-      - name: Draft the release with every platform's archive
+
+      # Pull requests stop here: the job summary shows what would be published.
+      - name: Check every file and write the notes
+        run: |
+          version="${GITHUB_SHA::7}"
+          cd release
+          for suffix in macOS-arm64.zip macOS-x86_64.zip Linux-x86_64.tar.gz Linux-arm64.tar.gz \
+                        Windows-x86_64.zip source.tar.gz; do
+            [[ -f "DQ8Recomp-$version-$suffix" ]] || { echo "::error::DQ8Recomp-$version-$suffix is missing"; exit 1; }
+          done
+          ffmpeg=$(ls ffmpeg-*.tar.xz)
+          sha256sum -- * > ../SHA256SUMS.txt
+          mv ../SHA256SUMS.txt .
+          sed -e "s/@VERSION@/$version/g" -e "s/@COMMIT@/$GITHUB_SHA/g" -e "s/@FFMPEG_SOURCE@/$ffmpeg/g" \
+            ../.github/release-notes.md > ../notes.md
+          {
+            echo "## DQ8Recomp $version"
+            cat ../notes.md
+            echo
+            echo '```'
+            cat SHA256SUMS.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish the release
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
-        run: gh release create "$GITHUB_REF_NAME" --draft --generate-notes artifacts/*
+        run: |
+          version="${GITHUB_SHA::7}"
+          # Running the same commit again replaces its files, and only its own.
+          if target=$(gh release view "$version" --json targetCommitish -q .targetCommitish 2> /dev/null); then
+            [[ "$target" == "$GITHUB_SHA" ]] || { echo "::error::release $version is for $target"; exit 1; }
+            gh release upload "$version" release/* --clobber
+          else
+            gh release create "$version" release/* --target "$GITHUB_SHA" --title "DQ8Recomp $version" \
+              --notes-file notes.md --generate-notes --latest
+          fi

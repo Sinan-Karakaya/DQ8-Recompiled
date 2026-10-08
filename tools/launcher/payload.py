@@ -7,6 +7,7 @@ C++ compiler, so a player downloads one archive and installs nothing else.
       fetch/         the sources CMake's FetchContent would clone with git
       tools/         Python, CMake, Ninja and pkgconf, relocatable
       deps/          SDL3 (static) and FFmpeg (shared, MPEG-2 only)
+      licenses/      the licenses of what tools/ and deps/ were built from
       payload.json   versions and where each tool lives
 
 Run it from a checkout with its submodules, on the platform it is for, with a
@@ -197,7 +198,15 @@ def run(args: list, cwd: Path | None = None, env: dict | None = None) -> None:
     subprocess.run([str(a) for a in args], cwd=cwd, env=env, check=True)
 
 
-def copy_source(repo: Path, dest: Path) -> str:
+def checkout_version(repo: Path) -> str:
+    """The commit's short hash, which names releases, and -dirty for local edits."""
+    def git(*args: str) -> str:
+        return subprocess.run(["git", "-C", repo, *args], check=True, capture_output=True, text=True).stdout.strip()
+    dirty = git("status", "--porcelain", "--untracked-files=no")
+    return git("rev-parse", "--short=7", "HEAD") + ("-dirty" if dirty else "")
+
+
+def copy_source(repo: Path, dest: Path, version: str) -> None:
     """The checkout's tracked files, submodules included, and its version."""
     listing = subprocess.run(["git", "-C", repo, "ls-files", "--recurse-submodules", "-z"],
                              check=True, capture_output=True).stdout.decode()
@@ -211,10 +220,45 @@ def copy_source(repo: Path, dest: Path) -> str:
             target.symlink_to(os.readlink(source))
         else:
             shutil.copy2(source, target)
-    version = subprocess.run(["git", "-C", repo, "describe", "--tags", "--always", "--dirty"],
-                             check=True, capture_output=True, text=True).stdout.strip()
     (dest / "VERSION").write_text(version + "\n")
-    return version
+
+
+def wheel_licenses(wheel: Path, dest: Path) -> None:
+    """The license files a wheel carries in its metadata."""
+    with zipfile.ZipFile(wheel) as archive:
+        for info in archive.infolist():
+            parts = info.filename.split("/")
+            if len(parts) == 3 and parts[0].endswith(".dist-info") and parts[1] == "licenses" and parts[2]:
+                dest.mkdir(parents=True, exist_ok=True)
+                with archive.open(info) as source, open(dest / parts[2], "wb") as out:
+                    shutil.copyfileobj(source, out)
+
+
+def keep_licenses(source: Path, names: list, dest: Path) -> None:
+    """Copies license files that must exist: a release has to carry them."""
+    dest.mkdir(parents=True, exist_ok=True)
+    for name in names:
+        shutil.copy2(source / name, dest / name)
+
+
+def notices(version: str, target: str) -> str:
+    ffmpeg = ("" if target.startswith("windows") else
+              f"  FFmpeg {FFMPEG[0]:<9} LGPL 2.1 or later. Its source is published with every\n"
+              f"                   release, as ffmpeg-{FFMPEG[0]}.tar.xz.\n")
+    return (f"DQ8Recomp {version}: the other projects in this download\n\n"
+            "tools/ and deps/ hold builds of these, each under its own license. The full\n"
+            "texts are in the folder named after each one here.\n\n"
+            f"  Python {PYTHON_VERSION:<9} PSF License. The python-build-standalone build\n"
+            f"                   ({PYTHON_RELEASE}) also links OpenSSL, SQLite, libffi, zlib and others,\n"
+            "                   listed with their licenses in that project's full archives:\n"
+            "                   https://github.com/astral-sh/python-build-standalone\n"
+            f"  CMake {WHEELS['cmake'][0]:<10} BSD 3-Clause, with the libraries it bundles\n"
+            f"  Ninja {WHEELS['ninja'][0]:<10} Apache License 2.0\n"
+            f"  pkgconf {WHEELS['pkgconf'][0]:<8} ISC License\n"
+            f"  SDL3 {SDL3[0]:<11} zlib License\n"
+            + ffmpeg +
+            "\nsource/ is DQ8Recomp with its submodules, and fetch/ the sources CMake would\n"
+            "download for the build; both keep their own license files.\n")
 
 
 def tools_env(tools: dict, deps: Path, target: str) -> dict:
@@ -295,6 +339,7 @@ def main() -> None:
     parser.add_argument("--cache", type=Path, help="where downloads are kept between runs")
     parser.add_argument("--work", type=Path, help="scratch directory for the builds")
     parser.add_argument("--jobs", type=int, default=os.cpu_count() or 4)
+    parser.add_argument("--version", help="names the payload; the commit's short hash by default")
     args = parser.parse_args()
 
     target = host_platform()
@@ -309,18 +354,30 @@ def main() -> None:
     work.mkdir(parents=True)
 
     print(f"payload: {target} into {out}", flush=True)
-    version = copy_source(args.repo.resolve(), out / "source")
+    version = args.version or checkout_version(args.repo.resolve())
+    copy_source(args.repo.resolve(), out / "source", version)
 
     tools_dir = out / "tools"
+    licenses = out / "licenses"
     triple, sha = PYTHON[target]
     name = f"cpython-{PYTHON_VERSION}+{PYTHON_RELEASE}-{triple}-install_only_stripped.tar.gz"
     url = (f"https://github.com/astral-sh/python-build-standalone/releases/download/{PYTHON_RELEASE}/"
            + name.replace("+", "%2B"))
     untar(fetch(url, sha, cache), tools_dir)  # unpacks python/
+    # The shallowest one is CPython's own; deeper ones belong to bundled packages.
+    found = sorted((tools_dir / "python").rglob("LICENSE.txt"), key=lambda path: len(path.parts))
+    if not found:
+        sys.exit("payload: the Python build has no LICENSE.txt")
+    keep_licenses(found[0].parent, [found[0].name], licenses / "Python")
     for tool, (tool_version, prefix, pins) in WHEELS.items():
         path, digest = pins.get(target) or pins["macos"]
         dest = tools_dir / tool / ("" if tool == "cmake" else "bin")
-        unpack_wheel(fetch(PYPI + path, digest, cache), prefix, dest)
+        wheel = fetch(PYPI + path, digest, cache)
+        unpack_wheel(wheel, prefix, dest)
+        wheel_licenses(wheel, licenses / {"cmake": "CMake", "ninja": "Ninja"}.get(tool, tool))
+    # CMake's notices, its own and its bundled libraries', without its 9 MB manual.
+    shutil.copytree(tools_dir / "cmake" / "doc" / "cmake", licenses / "CMake", dirs_exist_ok=True,
+                    ignore=shutil.ignore_patterns("*.qch"))
     pkgconf = tools_dir / "pkgconf" / "bin" / exe("pkgconf", target)
     # FindPkgConfig and people look for it under its usual name.
     shutil.copy2(pkgconf, pkgconf.with_name(exe("pkg-config", target)))
@@ -331,8 +388,11 @@ def main() -> None:
     deps = out / "deps"
     env = tools_env(tools, deps, target)
     build_sdl3(fetch(SDL3[1], SDL3[2], cache), work, deps, tools, env, args.jobs)
+    keep_licenses(work / "SDL3-src", ["LICENSE.txt"], licenses / "SDL3")
     if not target.startswith("windows"):
         build_ffmpeg(fetch(FFMPEG[1], FFMPEG[2], cache), work, deps, target, env, args.jobs)
+        keep_licenses(work / f"ffmpeg-{FFMPEG[0]}", ["COPYING.LGPLv2.1", "LICENSE.md"], licenses / "FFmpeg")
+    (licenses / "README.txt").write_text(notices(version, target))
     for unused in ("share/doc", "share/man", "share/ffmpeg"):
         shutil.rmtree(deps / unused, ignore_errors=True)
 

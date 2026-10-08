@@ -583,7 +583,7 @@ void LauncherApp::showPreview(Preview preview) {
         // A real first build on an M1 Pro at 10 jobs, 4 minutes into compiling.
         done(Stage::CheckDisc, 24.0, "4.18 GB checked");
         done(Stage::ExtractDisc, 4.0, "4.18 GB copied");
-        done(Stage::UnpackSource, 3.0, "Version 1.0");
+        done(Stage::UnpackSource, 3.0, "Version 2363922");
         done(Stage::BuildRecompiler, 21.0, "123 of 123");
         done(Stage::TranslateGame, 5.0, "12,442 files");
         done(Stage::ConfigureGame, 36.0, "Ready");
