@@ -242,6 +242,20 @@ jobs:
           ctest --test-dir build/ci-gpu --no-tests=error --timeout 60 \
             --output-on-failure --output-junit graphics.xml
 
+      - name: Build and test the launcher
+        run: |
+          cmake -S tools/launcher -B build/ci-launcher -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release -DCMAKE_PREFIX_PATH="$RUNNER_TEMP/sdl"
+          cmake --build build/ci-launcher
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            export SDL_GPU_DRIVER=vulkan
+            export VK_ICD_FILENAMES
+            VK_ICD_FILENAMES=$(find /usr/share/vulkan/icd.d -name 'lvp_icd*.json' -print -quit)
+          else
+            export SDL_GPU_DRIVER=metal
+          fi
+          ctest --test-dir build/ci-launcher --no-tests=error --timeout 120 --output-on-failure
+
       - name: Report GPU test availability
         if: always()
         run: |
@@ -269,3 +283,45 @@ jobs:
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
               summary.write('\n'.join(lines) + '\n')
           PY
+
+  launcher-windows:
+    name: Launcher (Windows)
+    runs-on: windows-2025
+    timeout-minutes: 30
+    # bash stops at the first failing command; pwsh only checks the last.
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check out Dear ImGui
+        run: git submodule update --init --depth 1 thirdparty/imgui
+
+      - name: Check out SDL
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: libsdl-org/SDL
+          ref: fa2c02bb6e21974a89ea9824bc53c9932abe5f9c # release-3.4.16
+          path: build/SDL
+          persist-credentials: false
+
+      # The Visual Studio generator finds MSVC without a developer prompt.
+      - name: Build SDL
+        run: |
+          prefix=$(cygpath -m "$RUNNER_TEMP/sdl")
+          cmake -S build/SDL -B build/sdl -DCMAKE_INSTALL_PREFIX="$prefix" \
+            -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF
+          cmake --build build/sdl --config Release --parallel
+          cmake --install build/sdl --config Release
+
+      - name: Build and test the launcher
+        run: |
+          prefix=$(cygpath -m "$RUNNER_TEMP/sdl")
+          cmake -S tools/launcher -B build/ci-launcher -DCMAKE_PREFIX_PATH="$prefix"
+          cmake --build build/ci-launcher --config Release --parallel
+          export PATH="$(cygpath -u "$RUNNER_TEMP/sdl/bin"):$PATH"
+          ctest --test-dir build/ci-launcher -C Release --no-tests=error --timeout 120 \
+            --output-on-failure

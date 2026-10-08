@@ -24,12 +24,43 @@ cd DQ8-Recompiled
 
 Follow the [build guide](https://github.com/Sinan-Karakaya/DQ8-Recompiled/wiki/Building)
 to generate the game code and build the runtime. A default CMake build produces a
-launcher stub, not the game.
+stub executable, not the game.
 
 - [Running and controls](https://github.com/Sinan-Karakaya/DQ8-Recompiled/wiki/Running)
 - [Architecture](https://github.com/Sinan-Karakaya/DQ8-Recompiled/wiki/Architecture)
 - [Tests and debugging](https://github.com/Sinan-Karakaya/DQ8-Recompiled/wiki/Testing)
 - [Status and priorities](https://github.com/Sinan-Karakaya/DQ8-Recompiled/wiki/Project-Status)
+
+### The launcher
+
+Or let the launcher do it. It is a small window: drop your disc image on it, and
+it checks the disc, copies its files, translates and compiles the game on your
+computer, and starts it. Nothing from the game is downloaded or shared.
+
+Download it for your system from
+[Releases](https://github.com/Sinan-Karakaya/DQ8-Recompiled/releases): each
+push to `main` is published there, named by its commit's short hash. The download
+carries everything the build needs (the source, CMake, Ninja, Python, SDL3,
+FFmpeg and the libraries the build would fetch) except a C++ compiler, which no
+release may include. If yours is missing, the launcher
+installs it through your system: Apple's Command Line Tools on macOS, Visual
+Studio Build Tools on Windows, your distribution's packages on Linux. The first
+build takes about ten minutes on a recent computer, longer with fewer cores.
+
+From a checkout instead, it uses the tools on your machine, and can install what
+is missing:
+
+```sh
+cmake -S tools/launcher -B build/launcher -G Ninja
+cmake --build build/launcher
+```
+
+Then open `build/launcher/DQ8Recomp Launcher.app` on macOS, or run
+`build/launcher/dq8-launcher` on Linux and Windows. `dq8-launcher --build --disc
+<image.iso>` runs the same build without the window.
+`python3 tools/launcher/payload.py --out build/payload` assembles a release's
+payload, as the Release workflow does for each platform: macOS on Apple silicon
+and Intel, Windows on x86-64, Linux on x86-64 and ARM64.
 
 ## Contributing
 
@@ -39,11 +70,11 @@ contributions are welcome.
 
 | Directory | Contents |
 | --- | --- |
-| `src/runtime` | Launcher, overlay dispatch, and game-specific integration |
+| `src/runtime` | Entry point, overlay dispatch, and game-specific integration |
 | `src/gfx` | GS state, memory, trace replay, and SDL GPU renderer |
 | `src/ui` | In-game menu (F1): display, sound, controls and quality-of-life settings |
 | `config` | Version-specific function maps and recompiler settings |
-| `tools` | Extraction, analysis, code generation, and tests |
+| `tools` | The launcher, extraction, analysis, code generation, and tests |
 | `thirdparty` | Pinned PS2Recomp, SIMDe and Dear ImGui submodules |
 
 Documentation is maintained in the
