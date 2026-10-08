@@ -33,6 +33,8 @@ struct StageState {
     double remaining = -1.0; // estimated seconds left, when known
     uint64_t startedMs = 0; // SDL_GetTicks() when it began, for the time so far
 };
+// "running", "already done"...: for logs and reports.
+const char *statusName(StageState::Status status);
 
 // What compiling one step costs, in units of a small file (about 0.2 s). Only
 // translated functions vary much: none passes a few seconds now, but time grows
@@ -97,6 +99,8 @@ public:
     // Snapshots for the window, taken under the lock.
     std::array<StageState, kStageCount> stages() const;
     std::vector<std::string> log(size_t lines) const;
+    // Changes with every line, so the window rebuilds its copy only then.
+    uint64_t logVersion() const { return m_logVersion.load(); }
     std::string error() const;
 
 private:
@@ -117,6 +121,7 @@ private:
     std::string m_error;
     std::thread m_thread;
     std::atomic<bool> m_running{false}, m_succeeded{false}, m_cancel{false};
+    std::atomic<uint64_t> m_logVersion{0};
     ChildEnvironment m_environment;
     std::filesystem::path m_logFile;
 };

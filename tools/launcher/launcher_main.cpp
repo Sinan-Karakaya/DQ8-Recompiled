@@ -97,17 +97,6 @@ std::vector<uint8_t> download(SDL_GPUDevice *device, SDL_GPUTexture *source, uin
     return pixels;
 }
 
-const char *statusName(StageState::Status status) {
-    switch (status) {
-    case StageState::Status::Waiting: return "waiting";
-    case StageState::Status::Running: return "running";
-    case StageState::Status::Done: return "done";
-    case StageState::Status::Failed: return "failed";
-    case StageState::Status::Skipped: return "already done";
-    }
-    return "";
-}
-
 volatile std::sig_atomic_t g_interrupted = 0;
 void onInterrupt(int) { g_interrupted = 1; }
 
