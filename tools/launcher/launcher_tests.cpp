@@ -265,6 +265,15 @@ void payloadUnpacking() {
                       "-DFETCHCONTENT_SOURCE_DIR_SPIRV_CROSS=" +
                           (repo / "build" / "fetch" / "spirv_cross-src").generic_string()) != args.end(),
             "each fetched source stands in for its git clone");
+#if defined(_WIN32)
+    const char *ninja = "ninja.exe";
+#else
+    const char *ninja = "ninja";
+#endif
+    require(std::find(args.begin(), args.end(),
+                      "-DCMAKE_MAKE_PROGRAM=" + (payloadDir / "tools" / "ninja" / "bin" / ninja).generic_string()) !=
+                args.end(),
+            "the payload's own ninja, not one cached from a release unpacked elsewhere");
 
     require(unpackPayload(*payload, repo, {}, error) == Unpacked::Copied, "the first unpack copies: " + error);
     require(std::filesystem::exists(repo / "setup.py") && std::filesystem::exists(repo / "build" / "deps" / "lib"),

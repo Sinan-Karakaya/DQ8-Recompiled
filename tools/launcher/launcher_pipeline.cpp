@@ -561,9 +561,15 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
     const std::string jobs = std::to_string(std::max(1, options.jobs));
     const std::optional<Payload> &payload = options.payload;
     // Both CMake configures use the payload's libraries and fetched sources.
-    const std::vector<std::string> payloadArgs = payload ? payloadCMakeArgs(*payload, repo) : std::vector<std::string>{};
-    const auto withPayload = [&](std::vector<std::string> args) {
-        args.insert(args.end(), payloadArgs.begin(), payloadArgs.end());
+    std::vector<std::string> configureArgs = payload ? payloadCMakeArgs(*payload, repo) : std::vector<std::string>{};
+#if defined(_WIN32)
+    // Visual Studio's compiler, which Tools checks for. Otherwise the game's
+    // CMake prefers any clang on PATH, and CMake a MinGW g++: an older clang
+    // fails on Visual Studio's headers, a MinGW one on the payload's libraries.
+    configureArgs.insert(configureArgs.end(), {"-DCMAKE_C_COMPILER=cl", "-DCMAKE_CXX_COMPILER=cl"});
+#endif
+    const auto withConfigureArgs = [&](std::vector<std::string> args) {
+        args.insert(args.end(), configureArgs.begin(), configureArgs.end());
         return args;
     };
     JsonValue hashes;
@@ -664,9 +670,10 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
         runStage(Stage::BuildRecompiler, [&] {
             const std::string dir = pathUtf8(repo / "build" / "ps2recomp-standalone");
             return command(Stage::BuildRecompiler,
-                           withPayload({"cmake", "-S", pathUtf8(repo / "thirdparty" / "PS2Recomp"), "-B", dir, "-G",
-                                        "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DPS2X_BUILD_RUNTIME=OFF",
-                                        "-DPS2X_BUILD_STUDIO=OFF", "-DPS2X_BUILD_TEST=OFF"})) &&
+                           withConfigureArgs({"cmake", "-S", pathUtf8(repo / "thirdparty" / "PS2Recomp"), "-B",
+                                              dir, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
+                                              "-DPS2X_BUILD_RUNTIME=OFF", "-DPS2X_BUILD_STUDIO=OFF",
+                                              "-DPS2X_BUILD_TEST=OFF"})) &&
                    command(Stage::BuildRecompiler, {"ninja", "-C", dir, "-j", jobs, "ps2_recomp"});
         }) &&
         runStage(Stage::TranslateGame, [&] {
@@ -698,10 +705,10 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
             return true;
         }) &&
         runStage(Stage::ConfigureGame, [&] {
-            std::vector<std::string> args = withPayload({"cmake", "-S", pathUtf8(repo), "-B",
-                                                         pathUtf8(repo / "build" / "game"), "-G", "Ninja",
-                                                         "-DCMAKE_BUILD_TYPE=Release", "-DDQ8_LINK_GENERATED=ON",
-                                                         "-DDQ8_LINK_OVERLAYS=ON", "-DDQ8_GFX_ENABLE_SDLGPU=ON"});
+            std::vector<std::string> args = withConfigureArgs({"cmake", "-S", pathUtf8(repo), "-B",
+                                                               pathUtf8(repo / "build" / "game"), "-G", "Ninja",
+                                                               "-DCMAKE_BUILD_TYPE=Release", "-DDQ8_LINK_GENERATED=ON",
+                                                               "-DDQ8_LINK_OVERLAYS=ON", "-DDQ8_GFX_ENABLE_SDLGPU=ON"});
 #if defined(__APPLE__)
             // The app bundle the build makes starts the game from these.
             args.push_back("-DDQ8_MACOS_ELF=" + pathUtf8(extracted / kVersion));

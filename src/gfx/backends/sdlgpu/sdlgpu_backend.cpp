@@ -39,33 +39,28 @@ extern std::atomic<uint64_t> g_gsUploadNativeNanos;
 extern std::atomic<uint64_t> g_gsUploadNativeCount;
 }
 
-// The movie counters live in ps2xRuntime's MPEG stub, which the standalone GS
-// dump harness does not link -- it has no EE and no kernel. Defined weakly here
-// so both builds link; the stub's strong definitions win wherever it is
-// present, and the harness just reports zeros.
-#if defined(__GNUC__) || defined(__clang__)
-#define DQ8_WEAK_COUNTER __attribute__((weak))
-#else
-#define DQ8_WEAK_COUNTER
-#endif
+// The movie and EE counters live in ps2xRuntime's MPEG stub and EE scheduler.
+// The GS dump tools, which have neither, define them in guest_stubs.cpp: a
+// weak definition here would do for GCC and Clang, but MSVC has none, and a
+// second one breaks the game's link there.
 extern "C++" {
-DQ8_WEAK_COUNTER std::atomic<uint64_t> g_mpegGetPictureNanos{0};
-DQ8_WEAK_COUNTER std::atomic<uint64_t> g_mpegGetPictureCount{0};
-DQ8_WEAK_COUNTER std::atomic<uint64_t> g_mpegWriteFrameNanos{0};
-DQ8_WEAK_COUNTER std::atomic<uint64_t> g_mpegWriteFrameCount{0};
-DQ8_WEAK_COUNTER std::atomic<uint64_t> g_mpegDemuxNanos{0};
-DQ8_WEAK_COUNTER std::atomic<uint64_t> g_mpegDemuxCount{0};
-DQ8_WEAK_COUNTER std::atomic<uint64_t> g_mpegDemuxRefusedCount{0};
-DQ8_WEAK_COUNTER std::atomic<uint64_t> g_mpegPendingEsPeakBytes{0};
-DQ8_WEAK_COUNTER std::atomic<uint64_t> g_eeGuestDispatchCount{0};
-DQ8_WEAK_COUNTER std::atomic<uint64_t> g_eeTransferThrowCount{0};
-DQ8_WEAK_COUNTER std::atomic<uint64_t> g_eeTransferSuspendCount{0};
-DQ8_WEAK_COUNTER std::atomic<uint64_t> g_eeRunLoopIterations{0};
-DQ8_WEAK_COUNTER std::atomic<uint64_t> g_eeRunLoopResumeCount{0};
-DQ8_WEAK_COUNTER std::atomic<uint64_t> g_eeProcessPendingEventsCount{0};
-DQ8_WEAK_COUNTER std::atomic<uint64_t> g_eeEnterGuestCount{0};
-DQ8_WEAK_COUNTER std::atomic<uint32_t> g_mpegDemuxThreadId{0};
-DQ8_WEAK_COUNTER std::atomic<uint32_t> g_mpegGetPictureThreadId{0};
+extern std::atomic<uint64_t> g_mpegGetPictureNanos;
+extern std::atomic<uint64_t> g_mpegGetPictureCount;
+extern std::atomic<uint64_t> g_mpegWriteFrameNanos;
+extern std::atomic<uint64_t> g_mpegWriteFrameCount;
+extern std::atomic<uint64_t> g_mpegDemuxNanos;
+extern std::atomic<uint64_t> g_mpegDemuxCount;
+extern std::atomic<uint64_t> g_mpegDemuxRefusedCount;
+extern std::atomic<uint64_t> g_mpegPendingEsPeakBytes;
+extern std::atomic<uint64_t> g_eeGuestDispatchCount;
+extern std::atomic<uint64_t> g_eeTransferThrowCount;
+extern std::atomic<uint64_t> g_eeTransferSuspendCount;
+extern std::atomic<uint64_t> g_eeRunLoopIterations;
+extern std::atomic<uint64_t> g_eeRunLoopResumeCount;
+extern std::atomic<uint64_t> g_eeProcessPendingEventsCount;
+extern std::atomic<uint64_t> g_eeEnterGuestCount;
+extern std::atomic<uint32_t> g_mpegDemuxThreadId;
+extern std::atomic<uint32_t> g_mpegGetPictureThreadId;
 }
 
 namespace dq8::gfx {

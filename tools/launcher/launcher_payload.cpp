@@ -19,6 +19,11 @@ constexpr const char *kOwnerMarker = ".dq8recomp-unpacked";
 constexpr const char *kVersionMarker = "payload-unpacked.txt";
 // The Tools page lists them in this order.
 constexpr const char *kToolOrder[] = {"Python", "CMake", "Ninja", "pkgconf", "SDL3", "FFmpeg"};
+#if defined(_WIN32)
+constexpr const char *kNinja = "ninja.exe";
+#else
+constexpr const char *kNinja = "ninja";
+#endif
 
 std::string readFile(const std::filesystem::path &path) {
     std::ifstream file(path, std::ios::binary);
@@ -141,6 +146,9 @@ std::vector<std::string> payloadCMakeArgs(const Payload &payload, const std::fil
     const std::filesystem::path build = repo / "build";
     std::vector<std::string> args = {
         "-DCMAKE_PREFIX_PATH=" + cmakePath(build / "deps"),
+        // Cached otherwise: unpacking a newer release elsewhere left CMake
+        // running the ninja of a folder that was gone.
+        "-DCMAKE_MAKE_PROGRAM=" + cmakePath(payload.ninjaBin / kNinja),
         "-DPKG_CONFIG_EXECUTABLE=" + cmakePath(payload.pkgconf),
         // The .pc files name the machine the payload was built on.
         "-DPKG_CONFIG_ARGN=--define-prefix",
