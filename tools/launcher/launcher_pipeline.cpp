@@ -544,8 +544,8 @@ bool Pipeline::command(Stage stage, const std::vector<std::string> &args, Compil
                 const double others = std::max(otherDone, static_cast<double>(total) - static_cast<double>(pendingAtStart));
                 progress = (plan->compiled + otherDone) / (plan->total + others);
                 // Every translated file compiled and only the last steps left:
-                // the runtime's VU1 programs (8 files, one of which takes MSVC
-                // most of an hour), the archives and the game's link. Each
+                // the runtime's VU1 programs (8 files of a few minutes each
+                // with MSVC), the archives and the game's link. Each
                 // prints nothing until it ends, so the count stops moving.
                 if (!finishing && plan->pending == 0u && total - done <= 12u && done < total) {
                     finishing = true;
