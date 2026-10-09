@@ -129,7 +129,8 @@ private:
 // "[1234/12503] Building CXX object ..." gives 1234 and 12503.
 bool parseNinjaProgress(const std::string &line, uint64_t &done, uint64_t &total);
 
-// Where the steps put their results inside the source tree.
+// Where the steps put their results inside the source tree. A release's
+// recompiler comes built, in its payload, instead.
 std::filesystem::path recompilerPath(const std::filesystem::path &repo);
 std::filesystem::path gamePath(const std::filesystem::path &repo);
 std::filesystem::path extractedDisc(const std::filesystem::path &workspace);

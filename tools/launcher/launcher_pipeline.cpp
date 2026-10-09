@@ -104,9 +104,9 @@ bool diagnostic(const std::string &text) {
 // What translating reads. When none of it changed the corpus on disk is
 // current, and translating again would rewrite all 12k files, so ninja would
 // compile every one of them again.
-std::string translationInputs(const std::filesystem::path &repo, const std::filesystem::path &extracted,
-                              const JsonValue &hashes) {
-    std::vector<std::filesystem::path> files = {recompilerPath(repo), repo / "setup.py",
+std::string translationInputs(const std::filesystem::path &repo, const std::filesystem::path &recompiler,
+                              const std::filesystem::path &extracted, const JsonValue &hashes) {
+    std::vector<std::filesystem::path> files = {recompiler, repo / "setup.py",
                                                 repo / "thirdparty" / "PS2Recomp" / "tools" /
                                                     "vu_program_manifest.py"};
     for (const auto &[dir, pythonOnly] : {std::pair{repo / "config" / kVersion, false},
@@ -587,6 +587,8 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
     const std::filesystem::path extracted = extractedDisc(options.workspace);
     const std::string jobs = std::to_string(std::max(1, options.jobs));
     const std::optional<Payload> &payload = options.payload;
+    const std::filesystem::path recompiler =
+        payload && !payload->recompiler.empty() ? payload->recompiler : recompilerPath(repo);
     // Both CMake configures use the payload's libraries and fetched sources.
     const std::vector<std::string> payloadArgs = payload ? payloadCMakeArgs(*payload, repo) : std::vector<std::string>{};
     const auto withConfigureArgs = [&]([[maybe_unused]] const std::filesystem::path &build,
@@ -700,6 +702,11 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
             return false;
         }) &&
         runStage(Stage::BuildRecompiler, [&] {
+            // Built from this same source when the release was made.
+            if (recompiler != recompilerPath(repo)) {
+                skip(Stage::BuildRecompiler, "Comes with this release");
+                return true;
+            }
             const std::filesystem::path build = repo / "build" / "ps2recomp-standalone";
             const std::string dir = pathUtf8(build);
             std::vector<std::string> configure = {"cmake", "-S", pathUtf8(repo / "thirdparty" / "PS2Recomp"),
@@ -719,7 +726,7 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
             // Kept under build/, so deleting build/ also forgets it.
             const std::filesystem::path generated = repo / "build" / "generated";
             const std::filesystem::path stampPath = generated / "launcher-translated.txt";
-            const std::string inputs = translationInputs(repo, extracted, hashes);
+            const std::string inputs = translationInputs(repo, recompiler, extracted, hashes);
             std::error_code dirError;
             if (std::filesystem::is_directory(generated / kVersion, dirError) && readText(stampPath) == inputs) {
                 skip(Stage::TranslateGame, "Translated before");
@@ -731,7 +738,7 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
             for (const std::string &arg : {pathUtf8(repo / "setup.py"), std::string("recompile"),
                                            std::string("--version"), std::string(kVersion),
                                            std::string("--extracted"), pathUtf8(extracted),
-                                           std::string("--recompiler"), pathUtf8(recompilerPath(repo))})
+                                           std::string("--recompiler"), pathUtf8(recompiler)})
                 args.push_back(arg);
             if (!command(Stage::TranslateGame, args))
                 return false;

@@ -5,7 +5,8 @@ C++ compiler, so a player downloads one archive and installs nothing else.
     payload/
       source/        this checkout with its submodules, tracked files only
       fetch/         the sources CMake's FetchContent would clone with git
-      tools/         Python, CMake, Ninja and pkgconf, relocatable
+      tools/         Python, CMake, Ninja and pkgconf, relocatable, and the
+                     recompiler, built from source/
       deps/          SDL3 (static) and FFmpeg (shared, MPEG-2 only)
       licenses/      the licenses of what tools/ and deps/ were built from
       payload.json   versions and where each tool lives
@@ -275,7 +276,9 @@ def notices(version: str, target: str) -> str:
             f"  SDL3 {SDL3[0]:<11} zlib License\n"
             + ffmpeg +
             "\nsource/ is DQ8Recomp with its submodules, and fetch/ the sources CMake would\n"
-            "download for the build; both keep their own license files.\n")
+            "download for the build; both keep their own license files. tools/ps2recomp\n"
+            "is PS2Recomp (GPL 3), built from source/thirdparty/PS2Recomp with the ELFIO,\n"
+            "fmt, toml11, libdwarf (LGPL 2.1) and Rabbitizer sources in fetch/.\n")
 
 
 def tools_env(tools: dict, deps: Path, target: str) -> dict:
@@ -323,14 +326,48 @@ def decodes_movies(cache: Path) -> bool:
     return False
 
 
+def recompiler_args(source: Path, target: str) -> list:
+    """How the recompiler a release brings is configured: with what players
+    have, never what only this machine has."""
+    args = ["-DCMAKE_BUILD_TYPE=Release", "-DPS2X_BUILD_RUNTIME=OFF", "-DPS2X_BUILD_STUDIO=OFF",
+            "-DPS2X_BUILD_TEST=OFF",
+            # libdwarf would link this machine's zlib and zstd, Homebrew's on a
+            # Mac, for compressed debug sections, which no PS2 executable has.
+            "-DENABLE_DECOMPRESSION=OFF"]
+    if target.startswith("windows"):
+        # Visual Studio's compiler, as the launcher uses, and the project's icon.
+        args += ["-DCMAKE_C_COMPILER=cl", "-DCMAKE_CXX_COMPILER=cl",
+                 f"-DCMAKE_PROJECT_PS2Recomp_INCLUDE={(source / 'cmake' / 'Dq8RecompilerIcon.cmake').as_posix()}"]
+    if target.startswith("macos"):
+        args += ["-DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew;/usr/local"]
+    return args
+
+
+def build_recompiler(recomp: Path, tools_dir: Path, tools: dict, env: dict, target: str, jobs: int) -> Path:
+    """ps2_recomp, from the configure harvest_fetch made: the launcher
+    translates the game with it rather than building it first."""
+    run([tools["cmake"], "--build", recomp, "--target", "ps2_recomp", "--parallel", str(jobs)], env=env)
+    dest = tools_dir / "ps2recomp" / exe("ps2_recomp", target)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(recomp / "ps2xRecomp" / dest.name, dest)
+    # Run once, so a library it would miss on a player's machine shows here.
+    usage = subprocess.run([str(dest)], capture_output=True, text=True).stdout
+    if "PS2Recomp" not in usage:
+        sys.exit(f"payload: {dest} did not run; it printed {usage!r}")
+    if target.startswith("macos"):
+        libraries = subprocess.run(["otool", "-L", str(dest)], check=True, capture_output=True, text=True).stdout
+        if "/opt/homebrew/" in libraries or "/usr/local/" in libraries:
+            sys.exit(f"payload: the recompiler links libraries players do not have:\n{libraries}")
+    return dest
+
+
 def harvest_fetch(source: Path, work: Path, fetch_dir: Path, tools: dict, deps: Path, env: dict,
                   target: str) -> list:
     """Configures the recompiler and the game once, as the launcher will, and
     keeps the sources FetchContent cloned."""
     recomp = work / "recomp"
-    run([tools["cmake"], "-S", source / "thirdparty" / "PS2Recomp", "-B", recomp, "-G", "Ninja",
-         "-DCMAKE_BUILD_TYPE=Release", "-DPS2X_BUILD_RUNTIME=OFF", "-DPS2X_BUILD_STUDIO=OFF",
-         "-DPS2X_BUILD_TEST=OFF"], env=env)
+    run([tools["cmake"], "-S", source / "thirdparty" / "PS2Recomp", "-B", recomp, "-G", "Ninja"]
+        + recompiler_args(source, target), env=env)
     # The game configures against a stand-in corpus: what it fetches does not
     # depend on the translated code. Overlays fetch nothing more.
     stub = work / "stub-generated"
@@ -437,6 +474,7 @@ def main() -> None:
         shutil.rmtree(deps / unused, ignore_errors=True)
 
     fetched = harvest_fetch(out / "source", work, out / "fetch", tools, deps, env, target)
+    recompiler = build_recompiler(work / "recomp", tools_dir, tools, env, target, args.jobs)
     prune(out, target)
     # What the translation's scripts import, after the pruning: a release once
     # went out without threading.
@@ -451,6 +489,7 @@ def main() -> None:
             "cmake": str(tools["cmake_bin"].relative_to(out).as_posix()),
             "ninja": str(tools["ninja_bin"].relative_to(out).as_posix()),
             "pkgconf": str(pkgconf.relative_to(out).as_posix()),
+            "recompiler": str(recompiler.relative_to(out).as_posix()),
         },
         "versions": {"Python": WINDOWS_PYTHON[0] if target.startswith("windows") else PYTHON_VERSION,
                      "CMake": WHEELS["cmake"][0], "Ninja": WHEELS["ninja"][0],

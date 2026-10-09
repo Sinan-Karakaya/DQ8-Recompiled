@@ -252,7 +252,8 @@ void payloadUnpacking() {
         std::ofstream(payloadDir / "payload.json", std::ios::trunc)
             << R"({"version": ")" << version << R"(", "platform": "test", "paths": {"source": "source",
                "fetch": "fetch", "deps": "deps", "python": "tools/python/bin/python3", "cmake": "tools/cmake/bin",
-               "ninja": "tools/ninja/bin", "pkgconf": "tools/pkgconf/bin/pkgconf"},
+               "ninja": "tools/ninja/bin", "pkgconf": "tools/pkgconf/bin/pkgconf",
+               "recompiler": "tools/ps2recomp/ps2_recomp"},
                "versions": {"SDL3": "3.4.16", "CMake": "4.4.4"}, "fetched": ["spirv_cross-src"]})";
     };
     manifest("v1");
@@ -261,6 +262,12 @@ void payloadUnpacking() {
     require(payload && payload->version == "v1", "a payload loads from its manifest: " + error);
     require(payload->versions.size() == 2u && payload->versions[0].first == "CMake",
             "its tools in the Tools page's order");
+    require(payload->recompiler.empty(), "a recompiler the payload names but lacks is built instead");
+    std::filesystem::create_directories(payloadDir / "tools" / "ps2recomp", ec);
+    std::ofstream(payloadDir / "tools" / "ps2recomp" / "ps2_recomp") << "recompiler";
+    payload = loadPayload(payloadDir, error);
+    require(payload && payload->recompiler == payloadDir / "tools" / "ps2recomp" / "ps2_recomp",
+            "the payload's own recompiler is used where it has one");
     const std::filesystem::path repo = root / "games" / "DQ8Recomp-source";
     const std::vector<std::string> args = payloadCMakeArgs(*payload, repo);
     require(std::find(args.begin(), args.end(),
