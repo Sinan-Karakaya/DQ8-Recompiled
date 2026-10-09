@@ -40,10 +40,16 @@ PYTHON_VERSION = "3.12.15"
 PYTHON = {
     "macos-arm64": ("aarch64-apple-darwin", "ad8d0c637c0a36b967b310e2c07254f4d2ca8cabaa7699e55ed6290aceb481a2"),
     "macos-x86_64": ("x86_64-apple-darwin", "562c30864ece2cb1d3e0ad66a1acd498611a47e5a10ce81b99158bef1ccbd355"),
-    "windows-x86_64": ("x86_64-pc-windows-msvc", "6fba7f2ae506facf41d457ea8293c7497910a675c69a4e954875169410a50402"),
     "linux-x86_64": ("x86_64-unknown-linux-gnu", "731af898886c5f821890dc901eca3c651cca8e51fa7308c159d12a1194aeac91"),
     "linux-arm64": ("aarch64-unknown-linux-gnu", "6541297dd1798dec8b98c3ad7492808a5b9d1c126801ceb2011e7754cd20d1ce"),
 }
+# Windows takes python.org's own build, from its NuGet package (tools/ is a
+# whole installation), as its every binary carries the Python Software
+# Foundation's signature: Smart App Control blocks an unsigned DLL it has not
+# seen before, and blocked python-build-standalone's libcrypto. 3.12 has had no
+# Windows binaries since it went security-only, hence the older patch release.
+WINDOWS_PYTHON = ("3.12.10", "https://api.nuget.org/v3-flatcontainer/python/3.12.10/python.3.12.10.nupkg",
+                  "0eb85c2dfccccf1b17352de4c397f69194035b7d37149eacc16f1147d93de3b8")
 
 PYPI = "https://files.pythonhosted.org/packages/"
 # PyPI wheels: (path under PYPI, SHA-256). Only their binaries are used.
@@ -252,13 +258,17 @@ def notices(version: str, target: str) -> str:
     ffmpeg = ("" if target.startswith("windows") else
               f"  FFmpeg {FFMPEG[0]:<9} LGPL 2.1 or later. Its source is published with every\n"
               f"                   release, as ffmpeg-{FFMPEG[0]}.tar.xz.\n")
+    python = (f"  Python {WINDOWS_PYTHON[0]:<9} PSF License. python.org's build also bundles OpenSSL,\n"
+              "                   SQLite, libffi and others, whose licenses follow Python's own.\n"
+              if target.startswith("windows") else
+              f"  Python {PYTHON_VERSION:<9} PSF License. The python-build-standalone build\n"
+              f"                   ({PYTHON_RELEASE}) also links OpenSSL, SQLite, libffi, zlib and others,\n"
+              "                   listed with their licenses in that project's full archives:\n"
+              "                   https://github.com/astral-sh/python-build-standalone\n")
     return (f"DQ8Recomp {version}: the other projects in this download\n\n"
             "tools/ and deps/ hold builds of these, each under its own license. The full\n"
             "texts are in the folder named after each one here.\n\n"
-            f"  Python {PYTHON_VERSION:<9} PSF License. The python-build-standalone build\n"
-            f"                   ({PYTHON_RELEASE}) also links OpenSSL, SQLite, libffi, zlib and others,\n"
-            "                   listed with their licenses in that project's full archives:\n"
-            "                   https://github.com/astral-sh/python-build-standalone\n"
+            + python +
             f"  CMake {WHEELS['cmake'][0]:<10} BSD 3-Clause, with the libraries it bundles\n"
             f"  Ninja {WHEELS['ninja'][0]:<10} Apache License 2.0\n"
             f"  pkgconf {WHEELS['pkgconf'][0]:<8} ISC License\n"
@@ -363,7 +373,7 @@ def main() -> None:
     args = parser.parse_args()
 
     target = host_platform()
-    if target not in PYTHON:
+    if target not in PYTHON and target != "windows-x86_64":
         sys.exit(f"payload: no pins for {target}")
     out = args.out.resolve()
     if out.exists():
@@ -379,11 +389,15 @@ def main() -> None:
 
     tools_dir = out / "tools"
     licenses = out / "licenses"
-    triple, sha = PYTHON[target]
-    name = f"cpython-{PYTHON_VERSION}+{PYTHON_RELEASE}-{triple}-install_only_stripped.tar.gz"
-    url = (f"https://github.com/astral-sh/python-build-standalone/releases/download/{PYTHON_RELEASE}/"
-           + name.replace("+", "%2B"))
-    untar(fetch(url, sha, cache), tools_dir)  # unpacks python/
+    if target.startswith("windows"):
+        # A NuGet package is a zip; its tools/ is the installation.
+        unpack_wheel(fetch(WINDOWS_PYTHON[1], WINDOWS_PYTHON[2], cache), "tools/", tools_dir / "python")
+    else:
+        triple, sha = PYTHON[target]
+        name = f"cpython-{PYTHON_VERSION}+{PYTHON_RELEASE}-{triple}-install_only_stripped.tar.gz"
+        url = (f"https://github.com/astral-sh/python-build-standalone/releases/download/{PYTHON_RELEASE}/"
+               + name.replace("+", "%2B"))
+        untar(fetch(url, sha, cache), tools_dir)  # unpacks python/
     # The shallowest one is CPython's own; deeper ones belong to bundled packages.
     found = sorted((tools_dir / "python").rglob("LICENSE.txt"), key=lambda path: len(path.parts))
     if not found:
@@ -424,6 +438,9 @@ def main() -> None:
 
     fetched = harvest_fetch(out / "source", work, out / "fetch", tools, deps, env, target)
     prune(out, target)
+    # What the translation's scripts import, after the pruning: a release once
+    # went out without threading.
+    run([python, "-I", "-c", "import hashlib, json, subprocess, threading"])
 
     manifest = {
         "version": version,
@@ -435,7 +452,8 @@ def main() -> None:
             "ninja": str(tools["ninja_bin"].relative_to(out).as_posix()),
             "pkgconf": str(pkgconf.relative_to(out).as_posix()),
         },
-        "versions": {"Python": PYTHON_VERSION, "CMake": WHEELS["cmake"][0], "Ninja": WHEELS["ninja"][0],
+        "versions": {"Python": WINDOWS_PYTHON[0] if target.startswith("windows") else PYTHON_VERSION,
+                     "CMake": WHEELS["cmake"][0], "Ninja": WHEELS["ninja"][0],
                      "pkgconf": WHEELS["pkgconf"][0], "SDL3": SDL3[0]}
                     | ({} if target.startswith("windows") else {"FFmpeg": FFMPEG[0]}),
         "fetched": fetched,
