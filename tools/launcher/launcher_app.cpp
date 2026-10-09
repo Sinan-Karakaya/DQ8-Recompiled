@@ -1204,6 +1204,12 @@ void LauncherApp::drawBuildPage() {
         if (stage.status == StageState::Status::Running) {
             ImGui::SetCursorScreenPos(ImVec2(at.x + em(1.8f), ImGui::GetCursorScreenPos().y + em(0.1f)));
             progressBar(stage.progress, em(0.32f), m_time);
+            if (!stage.note.empty()) {
+                ImGui::SetCursorScreenPos(ImVec2(at.x + em(1.8f), ImGui::GetCursorScreenPos().y + em(0.15f)));
+                ui::icon(Icon::Info, em(1.1f), palette::kGold);
+                ImGui::SameLine(0.0f, em(0.4f));
+                wrapped(palette::kText, stage.note);
+            }
         }
         ImGui::Dummy(ImVec2(0.0f, em(0.25f)));
     }

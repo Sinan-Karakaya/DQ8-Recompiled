@@ -32,6 +32,7 @@ struct StageState {
     double seconds = 0.0;   // spent, once finished
     double remaining = -1.0; // estimated seconds left, when known
     uint64_t startedMs = 0; // SDL_GetTicks() when it began, for the time so far
+    std::string note;       // what to expect from a long, silent part, while it runs
 };
 // "running", "already done"...: for logs and reports.
 const char *statusName(StageState::Status status);

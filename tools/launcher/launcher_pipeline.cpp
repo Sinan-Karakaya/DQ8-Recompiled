@@ -455,6 +455,7 @@ bool Pipeline::runStage(Stage stage, const std::function<bool()> &body) {
     StageState &state = m_stages[index];
     state.seconds = std::chrono::duration<double>(Clock::now() - started).count();
     state.remaining = -1.0;
+    state.note.clear();
     if (ok) {
         if (state.status == StageState::Status::Running)
             state.status = StageState::Status::Done;
@@ -484,7 +485,7 @@ bool Pipeline::command(Stage stage, const std::vector<std::string> &args, Compil
     // after which only small ones remain at a steady pace.
     auto mark = Clock::now();
     uint64_t markDone = 0u, lastTotal = 0u;
-    bool counting = false, upToDate = false, planChecked = false, warmedUp = false;
+    bool counting = false, upToDate = false, planChecked = false, warmedUp = false, finishing = false;
     // Steps other than translated files (libraries, links) count one unit each.
     double otherDone = 0.0;
     size_t pendingAtStart = plan ? plan->pending : 0u;
@@ -542,6 +543,18 @@ bool Pipeline::command(Stage stage, const std::vector<std::string> &args, Compil
                 largeLeft = plan->largeLeft;
                 const double others = std::max(otherDone, static_cast<double>(total) - static_cast<double>(pendingAtStart));
                 progress = (plan->compiled + otherDone) / (plan->total + others);
+                // Every translated file compiled and only the last steps left:
+                // the runtime's VU1 programs (8 files, one of which takes MSVC
+                // most of an hour), the archives and the game's link. Each
+                // prints nothing until it ends, so the count stops moving.
+                if (!finishing && plan->pending == 0u && total - done <= 12u && done < total) {
+                    finishing = true;
+                    line("Finishing: the last steps print nothing until they end, which can take a long while.");
+                    std::lock_guard lock(m_mutex);
+                    m_stages[static_cast<size_t>(stage)].note =
+                        "Almost done. The last steps, the largest files and then linking the game, show no progress "
+                        "and can look stuck for a long while. They aren't: let them finish.";
+                }
             }
             const double elapsed = std::chrono::duration<double>(now - mark).count();
             const double rate = elapsed > 5.0 ? static_cast<double>(done - markDone) / elapsed : 0.0;
@@ -553,8 +566,9 @@ bool Pipeline::command(Stage stage, const std::vector<std::string> &args, Compil
                 state.detail += "  " + std::to_string(largeLeft) + (largeLeft == 1u ? " large file" : " large files") +
                                 " left";
             // A count says nothing about how long the large files take.
-            state.remaining =
-                rate > 0.0 && largeLeft == 0u && warmedUp ? static_cast<double>(total - done) / rate : -1.0;
+            state.remaining = rate > 0.0 && largeLeft == 0u && warmedUp && !finishing
+                                  ? static_cast<double>(total - done) / rate
+                                  : -1.0;
         },
         m_cancel, error);
     if (code == 0) {
