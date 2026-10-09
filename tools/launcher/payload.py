@@ -333,11 +333,12 @@ def recompiler_args(source: Path, target: str) -> list:
             "-DPS2X_BUILD_TEST=OFF",
             # libdwarf would link this machine's zlib and zstd, Homebrew's on a
             # Mac, for compressed debug sections, which no PS2 executable has.
-            "-DENABLE_DECOMPRESSION=OFF"]
+            "-DENABLE_DECOMPRESSION=OFF",
+            # The icon, and what GCC 11 needs to compile it, as the launcher adds.
+            f"-DCMAKE_PROJECT_PS2Recomp_INCLUDE={(source / 'cmake' / 'Dq8Recompiler.cmake').as_posix()}"]
     if target.startswith("windows"):
-        # Visual Studio's compiler, as the launcher uses, and the project's icon.
-        args += ["-DCMAKE_C_COMPILER=cl", "-DCMAKE_CXX_COMPILER=cl",
-                 f"-DCMAKE_PROJECT_PS2Recomp_INCLUDE={(source / 'cmake' / 'Dq8RecompilerIcon.cmake').as_posix()}"]
+        # Visual Studio's compiler, as the launcher uses.
+        args += ["-DCMAKE_C_COMPILER=cl", "-DCMAKE_CXX_COMPILER=cl"]
     if target.startswith("macos"):
         args += ["-DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew;/usr/local"]
     return args
@@ -351,9 +352,12 @@ def build_recompiler(recomp: Path, tools_dir: Path, tools: dict, env: dict, targ
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(recomp / "ps2xRecomp" / dest.name, dest)
     # Run once, so a library it would miss on a player's machine shows here.
-    usage = subprocess.run([str(dest)], capture_output=True, text=True).stdout
-    if "PS2Recomp" not in usage:
-        sys.exit(f"payload: {dest} did not run; it printed {usage!r}")
+    # Without a config it prints its usage and exits with 1; a crash or a
+    # missing library exits otherwise.
+    usage = subprocess.run([str(dest)], capture_output=True, text=True)
+    if usage.returncode != 1 or "PS2Recomp" not in usage.stdout:
+        sys.exit(f"payload: {dest} did not run: exit code {usage.returncode}, "
+                 f"output {usage.stdout!r}, errors {usage.stderr!r}")
     if target.startswith("macos"):
         libraries = subprocess.run(["otool", "-L", str(dest)], check=True, capture_output=True, text=True).stdout
         if "/opt/homebrew/" in libraries or "/usr/local/" in libraries:

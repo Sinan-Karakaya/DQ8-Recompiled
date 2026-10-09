@@ -723,16 +723,14 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
             }
             const std::filesystem::path build = repo / "build" / "ps2recomp-standalone";
             const std::string dir = pathUtf8(build);
-            std::vector<std::string> configure = {"cmake", "-S", pathUtf8(repo / "thirdparty" / "PS2Recomp"),
-                                                  "-B", dir, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
-                                                  "-DPS2X_BUILD_RUNTIME=OFF", "-DPS2X_BUILD_STUDIO=OFF",
-                                                  "-DPS2X_BUILD_TEST=OFF"};
-#if defined(_WIN32)
-            // The project's icon, as a release's recompiler has (payload.py).
-            std::string icon = pathUtf8(repo / "cmake" / "Dq8RecompilerIcon.cmake");
-            std::replace(icon.begin(), icon.end(), '\\', '/');
-            configure.push_back("-DCMAKE_PROJECT_PS2Recomp_INCLUDE=" + icon);
-#endif
+            // The project's icon, and what GCC 11 needs to compile it, as a
+            // release's recompiler has (payload.py).
+            std::string adjust = pathUtf8(repo / "cmake" / "Dq8Recompiler.cmake");
+            std::replace(adjust.begin(), adjust.end(), '\\', '/');
+            const std::vector<std::string> configure = {
+                "cmake", "-S", pathUtf8(repo / "thirdparty" / "PS2Recomp"), "-B", dir, "-G", "Ninja",
+                "-DCMAKE_BUILD_TYPE=Release", "-DPS2X_BUILD_RUNTIME=OFF", "-DPS2X_BUILD_STUDIO=OFF",
+                "-DPS2X_BUILD_TEST=OFF", "-DCMAKE_PROJECT_PS2Recomp_INCLUDE=" + adjust};
             return command(Stage::BuildRecompiler, withConfigureArgs(build, configure)) &&
                    command(Stage::BuildRecompiler, {"ninja", "-C", dir, "-j", jobs, "ps2_recomp"});
         }) &&
