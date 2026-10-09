@@ -702,11 +702,17 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
         runStage(Stage::BuildRecompiler, [&] {
             const std::filesystem::path build = repo / "build" / "ps2recomp-standalone";
             const std::string dir = pathUtf8(build);
-            return command(Stage::BuildRecompiler,
-                           withConfigureArgs(build, {"cmake", "-S", pathUtf8(repo / "thirdparty" / "PS2Recomp"),
-                                                     "-B", dir, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
-                                                     "-DPS2X_BUILD_RUNTIME=OFF", "-DPS2X_BUILD_STUDIO=OFF",
-                                                     "-DPS2X_BUILD_TEST=OFF"})) &&
+            std::vector<std::string> configure = {"cmake", "-S", pathUtf8(repo / "thirdparty" / "PS2Recomp"),
+                                                  "-B", dir, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
+                                                  "-DPS2X_BUILD_RUNTIME=OFF", "-DPS2X_BUILD_STUDIO=OFF",
+                                                  "-DPS2X_BUILD_TEST=OFF"};
+#if defined(_WIN32)
+            // The project's icon, as a release's recompiler has (payload.py).
+            std::string icon = pathUtf8(repo / "cmake" / "Dq8RecompilerIcon.cmake");
+            std::replace(icon.begin(), icon.end(), '\\', '/');
+            configure.push_back("-DCMAKE_PROJECT_PS2Recomp_INCLUDE=" + icon);
+#endif
+            return command(Stage::BuildRecompiler, withConfigureArgs(build, configure)) &&
                    command(Stage::BuildRecompiler, {"ninja", "-C", dir, "-j", jobs, "ps2_recomp"});
         }) &&
         runStage(Stage::TranslateGame, [&] {
