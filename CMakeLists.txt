@@ -175,6 +175,17 @@ if(DQ8_BUILD_PS2RECOMP)
         # Keep --trace-printf available even when the compiler omits _DEBUG.
         target_compile_definitions(ps2_runtime PRIVATE RUNTIME_DECI2CALL)
     endif()
+    if(MSVC AND TARGET ps2_runtime)
+        # The runtime asks for whole-program optimization: /GL objects hold no
+        # machine code, and link.exe compiles all of them at once, the VU1
+        # programs' 350 MB among them. Linking the game took hours and 16 GB
+        # that way, for code the translated game, most of the executable,
+        # never got optimized with anyway.
+        set_property(TARGET ps2_runtime PROPERTY INTERPROCEDURAL_OPTIMIZATION_RELEASE OFF)
+        get_target_property(DQ8_RUNTIME_OPTIONS ps2_runtime COMPILE_OPTIONS)
+        list(REMOVE_ITEM DQ8_RUNTIME_OPTIONS /GL)
+        set_property(TARGET ps2_runtime PROPERTY COMPILE_OPTIONS "${DQ8_RUNTIME_OPTIONS}")
+    endif()
 endif()
 
 add_subdirectory(src)
