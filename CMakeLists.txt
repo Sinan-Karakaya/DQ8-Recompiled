@@ -124,20 +124,27 @@ if(DQ8_BUILD_PS2RECOMP)
         set(PS2X_BUILD_RUNTIME ON CACHE BOOL
             "DQ8Recomp: need the ps2_runtime target to link dq8" FORCE)
         # The game decrypts MVI streams; FFmpeg decodes them. Without these
-        # optional libraries the runtime reports undecodable movies and skips them.
+        # optional libraries the game still builds, and shows garbage for movies.
         find_package(PkgConfig QUIET)
         set(DQ8_HAVE_FFMPEG OFF)
-        if(PKG_CONFIG_FOUND)
+        if(WIN32)
+            # The runtime downloads its own prebuilt FFmpeg on Windows and the
+            # launcher's payload carries none, so pkg-config never finds one
+            # there. Probing turned movie decode off for every Windows build.
+            set(DQ8_HAVE_FFMPEG ON)
+        elseif(PKG_CONFIG_FOUND)
             pkg_check_modules(DQ8_FFMPEG_PROBE QUIET
                 libavcodec libavformat libavutil libswresample libswscale)
             if(DQ8_FFMPEG_PROBE_FOUND)
                 set(DQ8_HAVE_FFMPEG ON)
             endif()
         endif()
-        if(DQ8_HAVE_FFMPEG)
+        if(WIN32)
+            message(STATUS "DQ8Recomp: FFmpeg comes from the runtime's prebuilt download; MPEG video decode enabled")
+        elseif(DQ8_HAVE_FFMPEG)
             message(STATUS "DQ8Recomp: FFmpeg found (libavcodec ${DQ8_FFMPEG_PROBE_libavcodec_VERSION}); MPEG video decode enabled")
         else()
-            message(STATUS "DQ8Recomp: FFmpeg not found; movies will be skipped. "
+            message(STATUS "DQ8Recomp: FFmpeg not found; movies will show garbage. "
                            "Install ffmpeg-devel (or ffmpeg-free-devel) to play them.")
         endif()
         set(PS2X_ENABLE_FFMPEG ${DQ8_HAVE_FFMPEG} CACHE BOOL
