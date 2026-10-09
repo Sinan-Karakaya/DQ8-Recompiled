@@ -304,6 +304,15 @@ def build_ffmpeg(archive: Path, work: Path, deps: Path, target: str, env: dict, 
     run(["make", "install"], cwd=source, env=env)
 
 
+def decodes_movies(cache: Path) -> bool:
+    """Whether a configured game build has FFmpeg, as its CMakeCache.txt says."""
+    for line in cache.read_text(errors="replace").splitlines():
+        name, _, value = line.partition("=")
+        if name.partition(":")[0] == "PS2X_ENABLE_FFMPEG":
+            return value.strip().upper() in ("1", "ON", "YES", "TRUE", "Y")
+    return False
+
+
 def harvest_fetch(source: Path, work: Path, fetch_dir: Path, tools: dict, deps: Path, env: dict,
                   target: str) -> list:
     """Configures the recompiler and the game once, as the launcher will, and
@@ -323,6 +332,10 @@ def harvest_fetch(source: Path, work: Path, fetch_dir: Path, tools: dict, deps: 
          f"-DDQ8_GENERATED_DIR={stub}", f"-DCMAKE_PREFIX_PATH={deps}",
          f"-DPKG_CONFIG_EXECUTABLE={tools['pkgconf']}", "-DPKG_CONFIG_ARGN=--define-prefix",
          f"-DPython3_EXECUTABLE={tools['python']}"], env=env)
+    # This is the configure a player's build gets. Without FFmpeg the game still
+    # builds and runs, and shows garbage for every movie, as Windows releases did.
+    if not decodes_movies(game / "CMakeCache.txt"):
+        sys.exit("payload: the game's configure left FFmpeg off, so no movie would play in this release.")
     names = []
     for build in (recomp, game):
         for src in sorted((build / "_deps").glob("*-src")):

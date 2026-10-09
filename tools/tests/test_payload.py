@@ -40,5 +40,28 @@ class PruneTests(unittest.TestCase):
         self.assertFalse(tcl.exists())
 
 
+class DecodesMoviesTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.cache = Path(self.temp.name) / "CMakeCache.txt"
+
+    def write(self, *lines):
+        self.cache.write_text("\n".join(("CMAKE_BUILD_TYPE:STRING=Release",) + lines) + "\n")
+
+    def test_ffmpeg_on(self):
+        self.write("PS2X_ENABLE_FFMPEG:BOOL=ON")
+        self.assertTrue(payload.decodes_movies(self.cache))
+
+    def test_ffmpeg_off(self):
+        # What every Windows configure cached before it stopped probing pkg-config.
+        self.write("PS2X_ENABLE_FFMPEG:BOOL=OFF")
+        self.assertFalse(payload.decodes_movies(self.cache))
+
+    def test_a_configure_without_the_runtime_has_no_decoder(self):
+        self.write("DQ8_LINK_GENERATED:BOOL=OFF")
+        self.assertFalse(payload.decodes_movies(self.cache))
+
+
 if __name__ == "__main__":
     unittest.main()

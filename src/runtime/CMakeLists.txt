@@ -85,6 +85,9 @@ if(DQ8_LINK_GENERATED)
 
     target_link_libraries(dq8 PRIVATE ${DQ8_GENERATED_TARGETS} ps2_runtime)
     target_compile_definitions(dq8 PRIVATE DQ8_LINK_GENERATED=1)
+    # On Windows the runtime's FFmpeg is DLLs; the launcher starts dq8.exe from
+    # this build folder, so they go beside it. Elsewhere this does nothing.
+    ps2x_stage_ffmpeg_runtime_dlls(dq8)
 
     # The hardware GS backend, when SDL3 was found. Selected at runtime with
     # --gs=sdlgpu; without it dq8 still runs on the software rasteriser.
