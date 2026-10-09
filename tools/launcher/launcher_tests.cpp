@@ -315,6 +315,33 @@ void builtMarker() {
     std::filesystem::remove_all(root, ec);
 }
 
+// On Windows, a build CMake configured with anything but Visual Studio's cl
+// starts over.
+void configuredCompiler() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "dq8-launcher-compiler";
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    const std::filesystem::path build = root / "build", cl = root / "MSVC" / "14.44" / "CL.exe",
+                                clang = root / "LLVM" / "clang++.exe";
+    for (const std::filesystem::path &dir : {build, cl.parent_path(), clang.parent_path()})
+        std::filesystem::create_directories(dir, ec);
+    std::ofstream(cl) << "cl";
+    std::ofstream(clang) << "clang";
+    require(!configuredWith(build, "cl"), "a build not configured yet");
+    const auto cache = [&](const std::filesystem::path &c, const std::filesystem::path &cxx) {
+        std::ofstream(build / "CMakeCache.txt", std::ios::trunc)
+            << "CMAKE_C_COMPILER:FILEPATH=" << c.generic_string() << "\nCMAKE_C_COMPILER_LAUNCHER:STRING=\n"
+            << "CMAKE_CXX_COMPILER:FILEPATH=" << cxx.generic_string() << "\n";
+    };
+    cache(cl, cl);
+    require(configuredWith(build, "cl"), "Visual Studio's cl, whatever its case");
+    cache(cl, clang);
+    require(!configuredWith(build, "cl"), "clang is another compiler");
+    cache(root / "MSVC" / "14.38" / "cl.exe", root / "MSVC" / "14.38" / "cl.exe");
+    require(!configuredWith(build, "cl"), "and so is a cl an update removed");
+    std::filesystem::remove_all(root, ec);
+}
+
 void childProcess() {
 #if !defined(_WIN32)
     std::vector<std::string> lines;
@@ -447,6 +474,7 @@ int main() try {
     compileCosts();
     payloadUnpacking();
     builtMarker();
+    configuredCompiler();
     childProcess();
     childProcessToFile();
     childEnvironment();
