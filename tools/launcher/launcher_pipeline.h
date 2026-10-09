@@ -147,4 +147,8 @@ void markBuilt(const std::filesystem::path &repo, const BuiltFrom &from);
 // one from another release or disc: Play would start the old game.
 bool launcherBuilt(const std::filesystem::path &repo, const BuiltFrom &from);
 
+// Whether CMake configured the build directory with `compiler` ("cl"): its
+// cache names a file of that name, still there, as the C and C++ compiler.
+bool configuredWith(const std::filesystem::path &build, const std::string &compiler);
+
 } // namespace dq8::launcher
