@@ -218,6 +218,22 @@ bool launcherBuilt(const std::filesystem::path &repo, const BuiltFrom &from) {
            std::filesystem::is_regular_file(extractedDisc(from.workspace) / kVersion, ec);
 }
 
+bool configuredWith(const std::filesystem::path &build, const std::string &compiler) {
+    std::ifstream cache(build / "CMakeCache.txt");
+    int named = 0;
+    for (std::string line; std::getline(cache, line);) {
+        if (!line.starts_with("CMAKE_C_COMPILER:") && !line.starts_with("CMAKE_CXX_COMPILER:"))
+            continue;
+        const std::filesystem::path path = utf8Path(line.substr(line.find('=') + 1));
+        std::error_code ec;
+        if (!path.is_absolute() || !std::filesystem::is_regular_file(path, ec) ||
+            SDL_strcasecmp(pathUtf8(path.stem()).c_str(), compiler.c_str()) != 0)
+            return false;
+        ++named;
+    }
+    return named == 2;
+}
+
 double compileCost(const std::string &file, uint64_t bytes) {
     // Tables such as register_functions.cpp are as large but quick.
     if (file.rfind("FUN_", 0) != 0u && file.rfind("gap_", 0) != 0u)
@@ -562,7 +578,18 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
     const std::optional<Payload> &payload = options.payload;
     // Both CMake configures use the payload's libraries and fetched sources.
     const std::vector<std::string> payloadArgs = payload ? payloadCMakeArgs(*payload, repo) : std::vector<std::string>{};
-    const auto withPayload = [&](std::vector<std::string> args) {
+    const auto withConfigureArgs = [&]([[maybe_unused]] const std::filesystem::path &build,
+                                       std::vector<std::string> args) {
+#if defined(_WIN32)
+        // Visual Studio's compiler, which Tools checks for. Otherwise the game's
+        // CMake prefers any clang on PATH, and CMake a MinGW g++: an older clang
+        // fails on Visual Studio's headers, a MinGW one on the payload's libraries.
+        // A build made with another compiler, or with a cl an update removed,
+        // starts over: CMake would switch compilers itself, then configure a
+        // second time without any of these -D.
+        if (!configuredWith(build, "cl"))
+            args.insert(args.end(), {"--fresh", "-DCMAKE_C_COMPILER=cl", "-DCMAKE_CXX_COMPILER=cl"});
+#endif
         args.insert(args.end(), payloadArgs.begin(), payloadArgs.end());
         return args;
     };
@@ -662,11 +689,13 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
             return false;
         }) &&
         runStage(Stage::BuildRecompiler, [&] {
-            const std::string dir = pathUtf8(repo / "build" / "ps2recomp-standalone");
+            const std::filesystem::path build = repo / "build" / "ps2recomp-standalone";
+            const std::string dir = pathUtf8(build);
             return command(Stage::BuildRecompiler,
-                           withPayload({"cmake", "-S", pathUtf8(repo / "thirdparty" / "PS2Recomp"), "-B", dir, "-G",
-                                        "Ninja", "-DCMAKE_BUILD_TYPE=Release", "-DPS2X_BUILD_RUNTIME=OFF",
-                                        "-DPS2X_BUILD_STUDIO=OFF", "-DPS2X_BUILD_TEST=OFF"})) &&
+                           withConfigureArgs(build, {"cmake", "-S", pathUtf8(repo / "thirdparty" / "PS2Recomp"),
+                                                     "-B", dir, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
+                                                     "-DPS2X_BUILD_RUNTIME=OFF", "-DPS2X_BUILD_STUDIO=OFF",
+                                                     "-DPS2X_BUILD_TEST=OFF"})) &&
                    command(Stage::BuildRecompiler, {"ninja", "-C", dir, "-j", jobs, "ps2_recomp"});
         }) &&
         runStage(Stage::TranslateGame, [&] {
@@ -698,10 +727,11 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
             return true;
         }) &&
         runStage(Stage::ConfigureGame, [&] {
-            std::vector<std::string> args = withPayload({"cmake", "-S", pathUtf8(repo), "-B",
-                                                         pathUtf8(repo / "build" / "game"), "-G", "Ninja",
-                                                         "-DCMAKE_BUILD_TYPE=Release", "-DDQ8_LINK_GENERATED=ON",
-                                                         "-DDQ8_LINK_OVERLAYS=ON", "-DDQ8_GFX_ENABLE_SDLGPU=ON"});
+            const std::filesystem::path build = repo / "build" / "game";
+            std::vector<std::string> args =
+                withConfigureArgs(build, {"cmake", "-S", pathUtf8(repo), "-B", pathUtf8(build), "-G", "Ninja",
+                                          "-DCMAKE_BUILD_TYPE=Release", "-DDQ8_LINK_GENERATED=ON",
+                                          "-DDQ8_LINK_OVERLAYS=ON", "-DDQ8_GFX_ENABLE_SDLGPU=ON"});
 #if defined(__APPLE__)
             // The app bundle the build makes starts the game from these.
             args.push_back("-DDQ8_MACOS_ELF=" + pathUtf8(extracted / kVersion));
