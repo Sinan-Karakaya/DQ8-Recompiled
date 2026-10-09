@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 import subprocess
 import sys
@@ -228,17 +229,28 @@ def cmd_recompile(args: argparse.Namespace) -> None:
     local_configs = build / "recompile-configs" / args.version
     local_configs.mkdir(parents=True, exist_ok=True)
 
+    def from_repo(path: Path) -> str:
+        # ps2_recomp runs in REPO_ROOT, and its Windows build opens paths in
+        # the ANSI code page, where a user folder such as C:\Users\João read
+        # wrong. Relative, they leave it out. Another drive has no relative path.
+        try:
+            return os.path.relpath(path, REPO_ROOT)
+        except ValueError:
+            return str(path)
+
     def translate(template: Path, name: str, source: Path, csv: Path, output: Path) -> None:
         text = template.read_text(encoding="utf-8")
         for key, path in (("input", source), ("ghidra_output", csv), ("output", output)):
+            # Unescaped: JSON spells a character beyond U+FFFF, such as some
+            # kanji in names, as a surrogate pair, which TOML refuses.
             text, count = re.subn(rf'^{key}\s*=.*$',
-                                 lambda _: f"{key} = {json.dumps(str(path))}",
+                                 lambda _: f"{key} = {json.dumps(from_repo(path), ensure_ascii=False)}",
                                  text, flags=re.MULTILINE)
             if count != 1:
                 sys.exit(f"recompile: expected one {key} in {template}")
         config = local_configs / f"{name}.toml"
         config.write_text(text, encoding="utf-8")
-        subprocess.run([str(recompiler), str(config)], cwd=REPO_ROOT, check=True)
+        subprocess.run([str(recompiler), from_repo(config)], cwd=REPO_ROOT, check=True)
 
     translate(config_dir / "dq8.toml", "main", extracted / args.version,
               config_dir / "functions.enriched.csv", build / "generated" / args.version)
