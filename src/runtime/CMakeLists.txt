@@ -4,6 +4,10 @@ add_executable(dq8
     main.cpp
 )
 
+# The ELF, the disc image, saves and settings are opened by narrow paths.
+include("${CMAKE_SOURCE_DIR}/cmake/Dq8Utf8CodePage.cmake")
+dq8_use_utf8_code_page(dq8)
+
 target_compile_definitions(dq8 PRIVATE DQ8_VERSION="${DQ8_VERSION}")
 
 # Overlays require separately translated corpora, so linking is opt-in.

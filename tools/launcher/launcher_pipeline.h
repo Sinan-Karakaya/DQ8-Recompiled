@@ -151,4 +151,13 @@ bool launcherBuilt(const std::filesystem::path &repo, const BuiltFrom &from);
 // cache names a file of that name, still there, as the C and C++ compiler.
 bool configuredWith(const std::filesystem::path &build, const std::string &compiler);
 
+#if defined(_WIN32)
+// What runs args after Visual Studio's vcvars64.bat, from a batch file it
+// writes in `workspace`; args themselves when there is no Visual Studio. The
+// batch file reads the arguments from variables it adds to `environment`.
+std::vector<std::string> withCompilerEnvironment(const std::vector<std::string> &args,
+                                                 const std::filesystem::path &workspace,
+                                                 ChildEnvironment &environment);
+#endif
+
 } // namespace dq8::launcher

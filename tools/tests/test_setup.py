@@ -1,10 +1,16 @@
 import argparse
 import importlib.util
 import io
+import os
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
+
+try:
+    import tomllib
+except ModuleNotFoundError:  # Python 3.10
+    tomllib = None
 
 
 SPEC = importlib.util.spec_from_file_location(
@@ -86,6 +92,44 @@ class VerificationTests(unittest.TestCase):
                             patch("sys.stdout", new_callable=io.StringIO):
                         setup.cmd_verify(args)
                     self.assertEqual(check.call_args.args[0], root / tree / version)
+
+
+@unittest.skipIf(tomllib is None, "tomllib needs Python 3.11")
+class RecompileTests(unittest.TestCase):
+    def recompile(self, repo: Path, extracted: Path):
+        """The main config's [general] table and ps2_recomp's call, with no tool run."""
+        (extracted / "BIN").mkdir(parents=True)
+        (extracted / "SLUS_212.07").touch()
+        for overlay in ("TITLE", "CASINO", "VIEWER", "BATTLE", "MENU", "SHOP"):
+            (extracted / "BIN" / f"{overlay}.BIN").touch()
+        repo.mkdir(parents=True)
+        (repo / "ps2_recomp").touch()
+        args = argparse.Namespace(version="SLUS_212.07", extracted=str(extracted),
+                                  recompiler=str(repo / "ps2_recomp"))
+        with patch.object(setup, "REPO_ROOT", repo), patch.object(setup.subprocess, "run") as run:
+            setup.cmd_recompile(args)
+        call = run.call_args_list[0]
+        config = (repo / call.args[0][1]).read_text(encoding="utf-8")
+        return tomllib.loads(config)["general"], call
+
+    def test_launcher_layout_leaves_the_user_folder_out(self):
+        # The launcher unpacks the source beside the disc's files, both under
+        # the player's folder.
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory).resolve() / "Jo\N{LATIN SMALL LETTER A WITH TILDE}o" / "DQ8Recomp"
+            general, call = self.recompile(workspace / "DQ8Recomp-source", workspace / "Extracted_Usa")
+        self.assertEqual(general["input"], os.path.join("..", "Extracted_Usa", "SLUS_212.07"))
+        self.assertEqual(general["output"], os.path.join("build", "generated", "SLUS_212.07"))
+        self.assertEqual(call.args[0][1], os.path.join("build", "recompile-configs", "SLUS_212.07", "main.toml"))
+        self.assertEqual(call.kwargs["cwd"], workspace / "DQ8Recomp-source")
+
+    def test_name_beyond_u_ffff_reads_back(self):
+        # JSON escapes this kanji as a surrogate pair, which TOML refuses.
+        name = "\N{CJK UNIFIED IDEOGRAPH-20BB7}"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            general, _ = self.recompile(root / "source", root / name / "Extracted_Usa")
+        self.assertEqual(general["input"], os.path.join("..", name, "Extracted_Usa", "SLUS_212.07"))
 
 
 if __name__ == "__main__":

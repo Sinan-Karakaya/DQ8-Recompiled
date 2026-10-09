@@ -73,8 +73,12 @@ add_library(dq8_launcher_core STATIC
 target_include_directories(dq8_launcher_core PUBLIC "${CMAKE_CURRENT_LIST_DIR}")
 target_link_libraries(dq8_launcher_core PUBLIC ${DQ8_LAUNCHER_SDL})
 
+include("${DQ8_ROOT}/cmake/Dq8Utf8CodePage.cmake")
+
 add_executable(dq8-launcher WIN32 launcher_main.cpp launcher_app.cpp)
 target_link_libraries(dq8-launcher PRIVATE dq8_launcher_core dq8_launcher_ui)
+# It writes the game's settings, by the UTF-8 path SDL gives.
+dq8_use_utf8_code_page(dq8-launcher)
 if(APPLE)
     # A double-clickable app; it finds the source tree above itself.
     set_target_properties(dq8-launcher PROPERTIES
@@ -87,7 +91,8 @@ endif()
 
 enable_testing()
 add_executable(dq8-launcher-tests launcher_tests.cpp)
-target_link_libraries(dq8-launcher-tests PRIVATE dq8_launcher_core)
+target_link_libraries(dq8-launcher-tests PRIVATE dq8_launcher_core dq8_launcher_ui)
+dq8_use_utf8_code_page(dq8-launcher-tests)
 add_test(NAME launcher COMMAND dq8-launcher-tests)
 # Every page drawn once off screen; 77 (skipped) where there is no GPU.
 add_test(NAME launcher-pages COMMAND dq8-launcher --smoke --repo "${DQ8_ROOT}")

@@ -129,13 +129,14 @@ std::string translationInputs(const std::filesystem::path &repo, const std::file
     }
     return text;
 }
+} // namespace
 
 #if defined(_WIN32)
 // MSVC's tools need vcvars64.bat's environment, so CMake runs from a batch
 // file that calls it first; quoting through cmd.exe directly is fragile.
 std::vector<std::string> withCompilerEnvironment(const std::vector<std::string> &args,
                                                  const std::filesystem::path &workspace,
-                                                 const ChildEnvironment &environment) {
+                                                 ChildEnvironment &environment) {
     const std::string install =
         probeOutput({"C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe", "-latest",
                      "-products", "*", "-requires", "Microsoft.VisualStudio.Component.VC.Tools.x86.x64",
@@ -152,13 +153,18 @@ std::vector<std::string> withCompilerEnvironment(const std::vector<std::string> 
     bat << "if not defined WindowsSdkDir (\r\n"
            "  echo Visual Studio has no Windows SDK: add one in the Visual Studio Installer, then build again.\r\n"
            "  exit /b 1\r\n)\r\n";
-    for (const std::string &arg : args)
-        bat << '"' << arg << "\" ";
+    // cmd.exe reads a batch file in the console's code page, never UTF-8, so
+    // a path under a user folder with an accented name reached CMake
+    // misspelled. Variables keep it whole: cmd.exe holds them as UTF-16.
+    for (size_t i = 0; i < args.size(); ++i) {
+        const std::string name = "DQ8_LAUNCHER_ARG" + std::to_string(i);
+        environment.set.emplace_back(name, args[i]);
+        bat << "\"%" << name << "%\" ";
+    }
     bat << "\r\nexit /b %ERRORLEVEL%\r\n";
     return {"cmd.exe", "/d", "/c", pathUtf8(script)};
 }
 #endif
-} // namespace
 
 const char *stageTitle(Stage stage) {
     switch (stage) {
@@ -468,9 +474,10 @@ bool Pipeline::command(Stage stage, const std::vector<std::string> &args, Compil
         shown += " " + arg;
     line(shown);
     std::vector<std::string> run = args;
+    ChildEnvironment environment = m_environment;
 #if defined(_WIN32)
     if (!args.empty() && (args[0] == "cmake" || args[0] == "ninja"))
-        run = withCompilerEnvironment(args, m_logFile.parent_path(), m_environment);
+        run = withCompilerEnvironment(args, m_logFile.parent_path(), environment);
 #endif
     // The rate is measured from a mark: the first step, the step 5% in (past
     // the precompiled headers and slowest libraries), then each large step,
@@ -483,7 +490,7 @@ bool Pipeline::command(Stage stage, const std::vector<std::string> &args, Compil
     size_t pendingAtStart = plan ? plan->pending : 0u;
     std::string error;
     const int code = runProcess(
-        run, m_environment,
+        run, environment,
         [&](const std::string &text) {
             line(text);
             if (watch)
@@ -566,6 +573,10 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
     m_environment = std::move(environment);
     // The progress bar reads ninja's "[done/total]" prefix, whatever the user's taste.
     m_environment.set.emplace_back("NINJA_STATUS", "[%f/%t] ");
+    // The log is read as UTF-8. Into a pipe, Python on Windows writes the ANSI
+    // code page instead, and the translation's scripts stopped at the first
+    // path outside it.
+    m_environment.set.emplace_back("PYTHONUTF8", "1");
     std::error_code ec;
     std::filesystem::create_directories(options.workspace, ec);
     m_logFile = options.workspace / "launcher.log";

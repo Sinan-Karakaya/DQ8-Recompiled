@@ -1,5 +1,6 @@
 // The launcher's parts that need no window: hashing, the ISO reader, the hash
-// database's JSON, build progress and version parsing, and child processes.
+// database's JSON, build progress and version parsing, child processes, and
+// paths under a user folder whose name is not ASCII.
 #include "launcher_iso.h"
 #include "launcher_json.h"
 #include "launcher_payload.h"
@@ -7,6 +8,7 @@
 #include "launcher_process.h"
 #include "launcher_sha256.h"
 #include "launcher_tools.h"
+#include "ui/ui_settings.h"
 
 #include <algorithm>
 #include <atomic>
@@ -463,6 +465,46 @@ void childEnvironment() {
             "cmd.exe finds Windows' own commands: " + error);
 #endif
 }
+
+// A Portuguese and a Greek name, in UTF-8: no single ANSI code page holds both,
+// and a player's folder may be named either way.
+std::filesystem::path unicodeFolder() {
+    return std::filesystem::temp_directory_path() / utf8Path("dq8-launcher-Jo\xc3\xa3o-\xce\x96\xcf\x89\xce\xae");
+}
+
+// The game's settings live under the user's folder, by the UTF-8 path SDL gives.
+void settingsUnderUnicodeFolder() {
+    const std::filesystem::path folder = unicodeFolder();
+    std::error_code ec;
+    std::filesystem::remove_all(folder, ec);
+    const std::string path = pathUtf8(folder / "settings.ini");
+    dq8::ui::Settings settings;
+    settings.volume = 7;
+    require(dq8::ui::saveSettings(path, settings) && std::filesystem::is_regular_file(folder / "settings.ini", ec),
+            "settings save under " + path);
+    dq8::ui::Settings loaded;
+    require(dq8::ui::loadSettings(path, loaded) && loaded.volume == 7, "and load from there");
+    std::filesystem::remove_all(folder, ec);
+}
+
+// The build's commands run from a batch file that sets up Visual Studio first,
+// and a path under a user folder that is not ASCII reaches CMake whole.
+void compilerEnvironment() {
+#if defined(_WIN32)
+    const std::filesystem::path folder = unicodeFolder();
+    std::error_code ec;
+    std::filesystem::remove_all(folder, ec);
+    std::filesystem::create_directories(folder, ec);
+    ChildEnvironment environment;
+    const std::vector<std::string> command =
+        withCompilerEnvironment({"cmake", "-E", "make_directory", pathUtf8(folder / "made")}, folder, environment);
+    std::string error;
+    const std::atomic<bool> never{false};
+    require(runProcess(command, environment, {}, never, error) == 0, "CMake runs after vcvars64.bat: " + error);
+    require(std::filesystem::is_directory(folder / "made", ec), "and gets the path it was given");
+    std::filesystem::remove_all(folder, ec);
+#endif
+}
 } // namespace
 
 int main() try {
@@ -478,8 +520,10 @@ int main() try {
     childProcess();
     childProcessToFile();
     childEnvironment();
+    settingsUnderUnicodeFolder();
+    compilerEnvironment();
     std::puts("PASS: launcher hashing, ISO reader, JSON, progress, compile costs, versions, child processes and "
-              "their environment");
+              "their environment, paths under a non-ASCII folder");
     return 0;
 } catch (const std::exception &error) {
     std::fprintf(stderr, "FAIL: %s\n", error.what());

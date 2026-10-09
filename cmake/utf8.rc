@@ -1,0 +1,3 @@
+// For MinGW, which has no manifest tool: utf8.manifest as the executable's
+// manifest, resource 1 of type RT_MANIFEST (24).
+1 24 "utf8.manifest"
