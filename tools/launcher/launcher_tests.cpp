@@ -486,6 +486,25 @@ void settingsUnderUnicodeFolder() {
     require(dq8::ui::loadSettings(path, loaded) && loaded.volume == 7, "and load from there");
     std::filesystem::remove_all(folder, ec);
 }
+
+// The build's commands run from a batch file that sets up Visual Studio first,
+// and a path under a user folder that is not ASCII reaches CMake whole.
+void compilerEnvironment() {
+#if defined(_WIN32)
+    const std::filesystem::path folder = unicodeFolder();
+    std::error_code ec;
+    std::filesystem::remove_all(folder, ec);
+    std::filesystem::create_directories(folder, ec);
+    ChildEnvironment environment;
+    const std::vector<std::string> command =
+        withCompilerEnvironment({"cmake", "-E", "make_directory", pathUtf8(folder / "made")}, folder, environment);
+    std::string error;
+    const std::atomic<bool> never{false};
+    require(runProcess(command, environment, {}, never, error) == 0, "CMake runs after vcvars64.bat: " + error);
+    require(std::filesystem::is_directory(folder / "made", ec), "and gets the path it was given");
+    std::filesystem::remove_all(folder, ec);
+#endif
+}
 } // namespace
 
 int main() try {
@@ -502,6 +521,7 @@ int main() try {
     childProcessToFile();
     childEnvironment();
     settingsUnderUnicodeFolder();
+    compilerEnvironment();
     std::puts("PASS: launcher hashing, ISO reader, JSON, progress, compile costs, versions, child processes and "
               "their environment, paths under a non-ASCII folder");
     return 0;
