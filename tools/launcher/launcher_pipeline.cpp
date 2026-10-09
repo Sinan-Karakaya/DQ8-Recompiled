@@ -573,6 +573,10 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
     m_environment = std::move(environment);
     // The progress bar reads ninja's "[done/total]" prefix, whatever the user's taste.
     m_environment.set.emplace_back("NINJA_STATUS", "[%f/%t] ");
+    // The log is read as UTF-8. Into a pipe, Python on Windows writes the ANSI
+    // code page instead, and the translation's scripts stopped at the first
+    // path outside it.
+    m_environment.set.emplace_back("PYTHONUTF8", "1");
     std::error_code ec;
     std::filesystem::create_directories(options.workspace, ec);
     m_logFile = options.workspace / "launcher.log";
