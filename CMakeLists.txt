@@ -96,6 +96,13 @@ endif()
 # Its x86 intrinsics also require SSE4.1, independently of runtime target flags.
 set(DQ8_GENERATED_OPTFLAGS "-O2 -g0 ${DQ8_GENERATED_SIMD_FLAGS} -fno-strict-aliasing -fwrapv" CACHE STRING
     "Space-separated corpus flags; retain aliasing, wraparound, and required SIMD flags.")
+if(CMAKE_CXX_COMPILER_ID STREQUAL "MSVC")
+    # cl knows none of those flags but -O2, and warned about the others for
+    # every file. Without /Zc:inline it also keeps, in each of the 12k
+    # objects, every inline function and variable of the runtime and STL
+    # headers they include, used or not, which lib.exe then has to archive.
+    set(DQ8_GENERATED_OPTFLAGS "/O2 /Zc:inline")
+endif()
 
 if(DQ8_LINK_GENERATED AND NOT DQ8_BUILD_PS2RECOMP)
     message(STATUS "DQ8_LINK_GENERATED=ON: forcing DQ8_BUILD_PS2RECOMP=ON")

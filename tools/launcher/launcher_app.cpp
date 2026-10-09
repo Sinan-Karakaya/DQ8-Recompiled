@@ -578,7 +578,7 @@ void LauncherApp::showPreview(Preview preview) {
         add("Python", "Translates the game code", "3.13.1");
         add("pkg-config", "Finds SDL3 and FFmpeg", "2.5.1");
         add("SDL3", "Window, graphics, sound and controllers", missing ? nullptr : "3.4.16");
-        add("FFmpeg", "Plays the movies; without it they are skipped", "62.11.100", true);
+        add("FFmpeg", "Plays the movies; without it they show garbage", "62.11.100", true);
         add("LLVM", "Archives the compiled game faster", "21.1.0", true);
         if (missing) {
             tools.installCommand = "brew install cmake ninja pkgconf sdl3 ffmpeg llvm python";

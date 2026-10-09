@@ -220,7 +220,7 @@ ToolReport checkTools(const ChildEnvironment &environment, const Payload *payloa
             probe("pkg-config", "Finds SDL3 and FFmpeg", {"pkg-config", "--version"}, environment));
         report.tools.push_back(probe("SDL3", "Window, graphics, sound and controllers",
                                      {"pkg-config", "--modversion", "sdl3"}, environment, {3, 2}));
-        report.tools.push_back(probe("FFmpeg", "Plays the movies; without it they are skipped",
+        report.tools.push_back(probe("FFmpeg", "Plays the movies; without it they show garbage",
                                      {"pkg-config", "--modversion", "libavcodec"}, environment));
         report.tools.back().optional = true;
 #endif
