@@ -19,11 +19,15 @@ bool segmented(const char *id, int *value, const char *const *labels, int count,
                const bool *enabled = nullptr);
 
 void sectionHeader(const char *title);
-// A two-column table of settings: the label (with optional help underneath)
-// on the left, the control on the right.
+// A two-column table of settings: the label (with an optional chip such as
+// "Experimental" beside it, and help underneath) on the left, the control on
+// the right.
 bool beginSettings(const char *id);
-void settingRow(const char *label, const char *help = nullptr);
+void settingRow(const char *label, const char *help = nullptr, const char *chipText = nullptr);
 void endSettings();
+// A small rounded label after the item before it, or on the next line when
+// it does not fit beside it. Call after SameLine().
+void chip(const char *text, ImU32 color);
 
 // The settings window's page list: the selected entry carries the cursor.
 bool navItem(const char *label, Icon icon, bool selected);

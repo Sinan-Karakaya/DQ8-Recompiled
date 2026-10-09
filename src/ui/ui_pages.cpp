@@ -202,7 +202,9 @@ void Overlay::drawDisplayPage() {
 
     sectionHeader("Picture");
     if (beginSettings("picture")) {
-        settingRow("Internal resolution", "Draws the game at a multiple of the PS2's own resolution.");
+        settingRow("Internal resolution",
+                   "Draws the game at a multiple of the PS2's own resolution. Above 1\xC3\x97 is slower for now.",
+                   "Experimental");
         const uint32_t active = m_backend.activeResolutionScale();
         const uint32_t shown = m_pendingScale != 0u ? m_pendingScale : active;
         char preview[96];
@@ -229,11 +231,11 @@ void Overlay::drawDisplayPage() {
             break;
         }
         case gfx::SdlGpuAspect::Standard: aspectHelp = "The shape a television gave the game."; break;
-        case gfx::SdlGpuAspect::Wide: aspectHelp = "For the game's Wide Screen option."; break;
+        case gfx::SdlGpuAspect::Wide: aspectHelp = "For the game's Wide Screen option. Experimental for now."; break;
         case gfx::SdlGpuAspect::Native: aspectHelp = "Square pixels, as drawn; narrower than on a television."; break;
         case gfx::SdlGpuAspect::Stretch: aspectHelp = "Fills the window, whatever its shape."; break;
         }
-        settingRow("Aspect ratio", aspectHelp);
+        settingRow("Aspect ratio", aspectHelp, "Experimental");
         static constexpr const char *kAspects[] = {"Auto", "4:3", "16:9", "Native", "Stretch"};
         int aspect = static_cast<int>(m_settings.display.aspect);
         if (segmented("aspect", &aspect, kAspects, 5)) {
@@ -334,7 +336,8 @@ void Overlay::drawInterfacePage() {
                 }
             }
             if (canChangeSpeed()) {
-                settingRow("Fast-forward speed", "F4 switches between it and normal speed. Music keeps its tempo.");
+                settingRow("Fast-forward speed", "F4 switches between it and normal speed. Music keeps its tempo.",
+                           "Experimental");
                 static constexpr float kSpeeds[] = {2.0f, 3.0f, 4.0f, 0.0f};
                 static constexpr const char *kSpeedNames[] = {"2\xC3\x97", "3\xC3\x97", "4\xC3\x97", "Unlimited"};
                 int speed = 0;
