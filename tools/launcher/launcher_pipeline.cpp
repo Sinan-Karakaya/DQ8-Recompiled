@@ -104,9 +104,9 @@ bool diagnostic(const std::string &text) {
 // What translating reads. When none of it changed the corpus on disk is
 // current, and translating again would rewrite all 12k files, so ninja would
 // compile every one of them again.
-std::string translationInputs(const std::filesystem::path &repo, const std::filesystem::path &extracted,
-                              const JsonValue &hashes) {
-    std::vector<std::filesystem::path> files = {recompilerPath(repo), repo / "setup.py",
+std::string translationInputs(const std::filesystem::path &repo, const std::filesystem::path &recompiler,
+                              const std::filesystem::path &extracted, const JsonValue &hashes) {
+    std::vector<std::filesystem::path> files = {recompiler, repo / "setup.py",
                                                 repo / "thirdparty" / "PS2Recomp" / "tools" /
                                                     "vu_program_manifest.py"};
     for (const auto &[dir, pythonOnly] : {std::pair{repo / "config" / kVersion, false},
@@ -455,6 +455,7 @@ bool Pipeline::runStage(Stage stage, const std::function<bool()> &body) {
     StageState &state = m_stages[index];
     state.seconds = std::chrono::duration<double>(Clock::now() - started).count();
     state.remaining = -1.0;
+    state.note.clear();
     if (ok) {
         if (state.status == StageState::Status::Running)
             state.status = StageState::Status::Done;
@@ -484,7 +485,7 @@ bool Pipeline::command(Stage stage, const std::vector<std::string> &args, Compil
     // after which only small ones remain at a steady pace.
     auto mark = Clock::now();
     uint64_t markDone = 0u, lastTotal = 0u;
-    bool counting = false, upToDate = false, planChecked = false, warmedUp = false;
+    bool counting = false, upToDate = false, planChecked = false, warmedUp = false, finishing = false;
     // Steps other than translated files (libraries, links) count one unit each.
     double otherDone = 0.0;
     size_t pendingAtStart = plan ? plan->pending : 0u;
@@ -542,6 +543,18 @@ bool Pipeline::command(Stage stage, const std::vector<std::string> &args, Compil
                 largeLeft = plan->largeLeft;
                 const double others = std::max(otherDone, static_cast<double>(total) - static_cast<double>(pendingAtStart));
                 progress = (plan->compiled + otherDone) / (plan->total + others);
+                // Every translated file compiled and only the last steps left:
+                // the runtime's VU1 programs (8 files, one of which takes MSVC
+                // most of an hour), the archives and the game's link. Each
+                // prints nothing until it ends, so the count stops moving.
+                if (!finishing && plan->pending == 0u && total - done <= 12u && done < total) {
+                    finishing = true;
+                    line("Finishing: the last steps print nothing until they end, which can take a long while.");
+                    std::lock_guard lock(m_mutex);
+                    m_stages[static_cast<size_t>(stage)].note =
+                        "Almost done. The last steps, the largest files and then linking the game, show no progress "
+                        "and can look stuck for a long while. They aren't: let them finish.";
+                }
             }
             const double elapsed = std::chrono::duration<double>(now - mark).count();
             const double rate = elapsed > 5.0 ? static_cast<double>(done - markDone) / elapsed : 0.0;
@@ -553,8 +566,9 @@ bool Pipeline::command(Stage stage, const std::vector<std::string> &args, Compil
                 state.detail += "  " + std::to_string(largeLeft) + (largeLeft == 1u ? " large file" : " large files") +
                                 " left";
             // A count says nothing about how long the large files take.
-            state.remaining =
-                rate > 0.0 && largeLeft == 0u && warmedUp ? static_cast<double>(total - done) / rate : -1.0;
+            state.remaining = rate > 0.0 && largeLeft == 0u && warmedUp && !finishing
+                                  ? static_cast<double>(total - done) / rate
+                                  : -1.0;
         },
         m_cancel, error);
     if (code == 0) {
@@ -587,6 +601,8 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
     const std::filesystem::path extracted = extractedDisc(options.workspace);
     const std::string jobs = std::to_string(std::max(1, options.jobs));
     const std::optional<Payload> &payload = options.payload;
+    const std::filesystem::path recompiler =
+        payload && !payload->recompiler.empty() ? payload->recompiler : recompilerPath(repo);
     // Both CMake configures use the payload's libraries and fetched sources.
     const std::vector<std::string> payloadArgs = payload ? payloadCMakeArgs(*payload, repo) : std::vector<std::string>{};
     const auto withConfigureArgs = [&]([[maybe_unused]] const std::filesystem::path &build,
@@ -700,20 +716,29 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
             return false;
         }) &&
         runStage(Stage::BuildRecompiler, [&] {
+            // Built from this same source when the release was made.
+            if (recompiler != recompilerPath(repo)) {
+                skip(Stage::BuildRecompiler, "Comes with this release");
+                return true;
+            }
             const std::filesystem::path build = repo / "build" / "ps2recomp-standalone";
             const std::string dir = pathUtf8(build);
-            return command(Stage::BuildRecompiler,
-                           withConfigureArgs(build, {"cmake", "-S", pathUtf8(repo / "thirdparty" / "PS2Recomp"),
-                                                     "-B", dir, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
-                                                     "-DPS2X_BUILD_RUNTIME=OFF", "-DPS2X_BUILD_STUDIO=OFF",
-                                                     "-DPS2X_BUILD_TEST=OFF"})) &&
+            // The project's icon, and what GCC 11 needs to compile it, as a
+            // release's recompiler has (payload.py).
+            std::string adjust = pathUtf8(repo / "cmake" / "Dq8Recompiler.cmake");
+            std::replace(adjust.begin(), adjust.end(), '\\', '/');
+            const std::vector<std::string> configure = {
+                "cmake", "-S", pathUtf8(repo / "thirdparty" / "PS2Recomp"), "-B", dir, "-G", "Ninja",
+                "-DCMAKE_BUILD_TYPE=Release", "-DPS2X_BUILD_RUNTIME=OFF", "-DPS2X_BUILD_STUDIO=OFF",
+                "-DPS2X_BUILD_TEST=OFF", "-DCMAKE_PROJECT_PS2Recomp_INCLUDE=" + adjust};
+            return command(Stage::BuildRecompiler, withConfigureArgs(build, configure)) &&
                    command(Stage::BuildRecompiler, {"ninja", "-C", dir, "-j", jobs, "ps2_recomp"});
         }) &&
         runStage(Stage::TranslateGame, [&] {
             // Kept under build/, so deleting build/ also forgets it.
             const std::filesystem::path generated = repo / "build" / "generated";
             const std::filesystem::path stampPath = generated / "launcher-translated.txt";
-            const std::string inputs = translationInputs(repo, extracted, hashes);
+            const std::string inputs = translationInputs(repo, recompiler, extracted, hashes);
             std::error_code dirError;
             if (std::filesystem::is_directory(generated / kVersion, dirError) && readText(stampPath) == inputs) {
                 skip(Stage::TranslateGame, "Translated before");
@@ -725,7 +750,7 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
             for (const std::string &arg : {pathUtf8(repo / "setup.py"), std::string("recompile"),
                                            std::string("--version"), std::string(kVersion),
                                            std::string("--extracted"), pathUtf8(extracted),
-                                           std::string("--recompiler"), pathUtf8(recompilerPath(repo))})
+                                           std::string("--recompiler"), pathUtf8(recompiler)})
                 args.push_back(arg);
             if (!command(Stage::TranslateGame, args))
                 return false;

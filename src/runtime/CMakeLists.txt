@@ -7,6 +7,8 @@ add_executable(dq8
 # The ELF, the disc image, saves and settings are opened by narrow paths.
 include("${CMAKE_SOURCE_DIR}/cmake/Dq8Utf8CodePage.cmake")
 dq8_use_utf8_code_page(dq8)
+include("${CMAKE_SOURCE_DIR}/cmake/Dq8Icon.cmake")
+dq8_add_icon(dq8)
 
 target_compile_definitions(dq8 PRIVATE DQ8_VERSION="${DQ8_VERSION}")
 
@@ -132,6 +134,8 @@ if(APPLE AND DQ8_LINK_GENERATED)
     set(DQ8_MACOS_APP "${CMAKE_BINARY_DIR}/DQ8Recomp.app")
     configure_file("${CMAKE_SOURCE_DIR}/tools/macos/Info.plist"
         "${DQ8_MACOS_APP}/Contents/Info.plist" COPYONLY)
+    configure_file("${CMAKE_SOURCE_DIR}/res/icon/dq8.icns"
+        "${DQ8_MACOS_APP}/Contents/Resources/DQ8Recomp.icns" COPYONLY)
     configure_file("${CMAKE_SOURCE_DIR}/tools/macos/launch.sh.in"
         "${CMAKE_CURRENT_BINARY_DIR}/macos-launch.sh" @ONLY)
     file(GENERATE OUTPUT "${DQ8_MACOS_APP}/Contents/MacOS/DQ8Recomp"

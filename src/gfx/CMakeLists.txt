@@ -77,8 +77,11 @@ if(DQ8_GFX_SDL_TARGET)
         backends/sdlgpu/sdlgpu_input.cpp
         backends/sdlgpu/sdlgpu_targets.cpp
         backends/sdlgpu/sdlgpu_textures.cpp
+        backends/sdlgpu/sdlgpu_window_icon.cpp
     )
     target_link_libraries(dq8_gfx_sdlgpu PUBLIC dq8_gfx_gs ${DQ8_GFX_SDL_TARGET})
+    include("${DQ8_GFX_ROOT}/cmake/Dq8Icon.cmake")
+    dq8_embed_window_icon(dq8_gfx_sdlgpu)
 
     dq8_add_shader(dq8_gfx_sdlgpu
         SOURCE "${CMAKE_CURRENT_LIST_DIR}/backends/sdlgpu/shaders/gs_draw.vert"

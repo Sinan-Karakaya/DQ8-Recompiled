@@ -74,4 +74,8 @@ struct SdlGpuCapture {
 };
 using SdlGpuCaptureCallback = std::function<void(SdlGpuCapture capture)>;
 
+// Gives a window the project's icon where it has to come from the window, as
+// on Linux. Windows and macOS already show the executable's or the bundle's.
+void setWindowIcon(SDL_Window *window);
+
 } // namespace dq8::gfx

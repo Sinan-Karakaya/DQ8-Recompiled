@@ -107,6 +107,10 @@ std::optional<Payload> loadPayload(const std::filesystem::path &root, std::strin
     payload.cmakeBin = path("cmake");
     payload.ninjaBin = path("ninja");
     payload.pkgconf = path("pkgconf");
+    // An antivirus may have taken it away since the download.
+    std::error_code recompilerError;
+    if (!paths["recompiler"].string.empty() && std::filesystem::is_regular_file(path("recompiler"), recompilerError))
+        payload.recompiler = path("recompiler");
     for (const char *name : kToolOrder) {
         const JsonValue &version = manifest["versions"][name];
         if (version.kind == JsonValue::Kind::String)

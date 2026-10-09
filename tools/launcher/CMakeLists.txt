@@ -53,12 +53,15 @@ add_library(dq8_launcher_ui STATIC
     "${DQ8_ROOT}/src/ui/ui_style.cpp"
     "${DQ8_ROOT}/src/ui/ui_widgets.cpp"
     "${DQ8_ROOT}/src/gfx/backends/sdlgpu/sdlgpu_input.cpp"
+    "${DQ8_ROOT}/src/gfx/backends/sdlgpu/sdlgpu_window_icon.cpp"
     "${DQ8_UI_FONT_SOURCE}"
 )
 target_include_directories(dq8_launcher_ui PUBLIC "${DQ8_ROOT}/src")
 target_include_directories(dq8_launcher_ui SYSTEM PUBLIC "${DQ8_IMGUI_DIR}" "${DQ8_IMGUI_DIR}/backends")
 target_compile_definitions(dq8_launcher_ui PUBLIC IMGUI_DISABLE_OBSOLETE_FUNCTIONS)
 target_link_libraries(dq8_launcher_ui PUBLIC ${DQ8_LAUNCHER_SDL})
+include("${DQ8_ROOT}/cmake/Dq8Icon.cmake")
+dq8_embed_window_icon(dq8_launcher_ui)
 
 # The parts with no window, which the tests exercise directly.
 add_library(dq8_launcher_core STATIC
@@ -88,6 +91,8 @@ if(APPLE)
         MACOSX_BUNDLE_GUI_IDENTIFIER "org.dq8recomp.launcher"
         MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_LIST_DIR}/Info.plist.in")
 endif()
+# After MACOSX_BUNDLE: on macOS the icon goes in the bundle.
+dq8_add_icon(dq8-launcher)
 
 enable_testing()
 add_executable(dq8-launcher-tests launcher_tests.cpp)

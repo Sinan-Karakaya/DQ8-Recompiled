@@ -5,7 +5,8 @@ C++ compiler, so a player downloads one archive and installs nothing else.
     payload/
       source/        this checkout with its submodules, tracked files only
       fetch/         the sources CMake's FetchContent would clone with git
-      tools/         Python, CMake, Ninja and pkgconf, relocatable
+      tools/         Python, CMake, Ninja and pkgconf, relocatable, and the
+                     recompiler, built from source/
       deps/          SDL3 (static) and FFmpeg (shared, MPEG-2 only)
       licenses/      the licenses of what tools/ and deps/ were built from
       payload.json   versions and where each tool lives
@@ -40,10 +41,16 @@ PYTHON_VERSION = "3.12.15"
 PYTHON = {
     "macos-arm64": ("aarch64-apple-darwin", "ad8d0c637c0a36b967b310e2c07254f4d2ca8cabaa7699e55ed6290aceb481a2"),
     "macos-x86_64": ("x86_64-apple-darwin", "562c30864ece2cb1d3e0ad66a1acd498611a47e5a10ce81b99158bef1ccbd355"),
-    "windows-x86_64": ("x86_64-pc-windows-msvc", "6fba7f2ae506facf41d457ea8293c7497910a675c69a4e954875169410a50402"),
     "linux-x86_64": ("x86_64-unknown-linux-gnu", "731af898886c5f821890dc901eca3c651cca8e51fa7308c159d12a1194aeac91"),
     "linux-arm64": ("aarch64-unknown-linux-gnu", "6541297dd1798dec8b98c3ad7492808a5b9d1c126801ceb2011e7754cd20d1ce"),
 }
+# Windows takes python.org's own build, from its NuGet package (tools/ is a
+# whole installation), as its every binary carries the Python Software
+# Foundation's signature: Smart App Control blocks an unsigned DLL it has not
+# seen before, and blocked python-build-standalone's libcrypto. 3.12 has had no
+# Windows binaries since it went security-only, hence the older patch release.
+WINDOWS_PYTHON = ("3.12.10", "https://api.nuget.org/v3-flatcontainer/python/3.12.10/python.3.12.10.nupkg",
+                  "0eb85c2dfccccf1b17352de4c397f69194035b7d37149eacc16f1147d93de3b8")
 
 PYPI = "https://files.pythonhosted.org/packages/"
 # PyPI wheels: (path under PYPI, SHA-256). Only their binaries are used.
@@ -252,20 +259,26 @@ def notices(version: str, target: str) -> str:
     ffmpeg = ("" if target.startswith("windows") else
               f"  FFmpeg {FFMPEG[0]:<9} LGPL 2.1 or later. Its source is published with every\n"
               f"                   release, as ffmpeg-{FFMPEG[0]}.tar.xz.\n")
+    python = (f"  Python {WINDOWS_PYTHON[0]:<9} PSF License. python.org's build also bundles OpenSSL,\n"
+              "                   SQLite, libffi and others, whose licenses follow Python's own.\n"
+              if target.startswith("windows") else
+              f"  Python {PYTHON_VERSION:<9} PSF License. The python-build-standalone build\n"
+              f"                   ({PYTHON_RELEASE}) also links OpenSSL, SQLite, libffi, zlib and others,\n"
+              "                   listed with their licenses in that project's full archives:\n"
+              "                   https://github.com/astral-sh/python-build-standalone\n")
     return (f"DQ8Recomp {version}: the other projects in this download\n\n"
             "tools/ and deps/ hold builds of these, each under its own license. The full\n"
             "texts are in the folder named after each one here.\n\n"
-            f"  Python {PYTHON_VERSION:<9} PSF License. The python-build-standalone build\n"
-            f"                   ({PYTHON_RELEASE}) also links OpenSSL, SQLite, libffi, zlib and others,\n"
-            "                   listed with their licenses in that project's full archives:\n"
-            "                   https://github.com/astral-sh/python-build-standalone\n"
+            + python +
             f"  CMake {WHEELS['cmake'][0]:<10} BSD 3-Clause, with the libraries it bundles\n"
             f"  Ninja {WHEELS['ninja'][0]:<10} Apache License 2.0\n"
             f"  pkgconf {WHEELS['pkgconf'][0]:<8} ISC License\n"
             f"  SDL3 {SDL3[0]:<11} zlib License\n"
             + ffmpeg +
             "\nsource/ is DQ8Recomp with its submodules, and fetch/ the sources CMake would\n"
-            "download for the build; both keep their own license files.\n")
+            "download for the build; both keep their own license files. tools/ps2recomp\n"
+            "is PS2Recomp (GPL 3), built from source/thirdparty/PS2Recomp with the ELFIO,\n"
+            "fmt, toml11, libdwarf (LGPL 2.1) and Rabbitizer sources in fetch/.\n")
 
 
 def tools_env(tools: dict, deps: Path, target: str) -> dict:
@@ -313,14 +326,52 @@ def decodes_movies(cache: Path) -> bool:
     return False
 
 
+def recompiler_args(source: Path, target: str) -> list:
+    """How the recompiler a release brings is configured: with what players
+    have, never what only this machine has."""
+    args = ["-DCMAKE_BUILD_TYPE=Release", "-DPS2X_BUILD_RUNTIME=OFF", "-DPS2X_BUILD_STUDIO=OFF",
+            "-DPS2X_BUILD_TEST=OFF",
+            # libdwarf would link this machine's zlib and zstd, Homebrew's on a
+            # Mac, for compressed debug sections, which no PS2 executable has.
+            "-DENABLE_DECOMPRESSION=OFF",
+            # The icon, and what GCC 11 needs to compile it, as the launcher adds.
+            f"-DCMAKE_PROJECT_PS2Recomp_INCLUDE={(source / 'cmake' / 'Dq8Recompiler.cmake').as_posix()}"]
+    if target.startswith("windows"):
+        # Visual Studio's compiler, as the launcher uses.
+        args += ["-DCMAKE_C_COMPILER=cl", "-DCMAKE_CXX_COMPILER=cl"]
+    if target.startswith("macos"):
+        args += ["-DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew;/usr/local"]
+    return args
+
+
+def build_recompiler(recomp: Path, tools_dir: Path, tools: dict, env: dict, target: str, jobs: int) -> Path:
+    """ps2_recomp, from the configure harvest_fetch made: the launcher
+    translates the game with it rather than building it first."""
+    run([tools["cmake"], "--build", recomp, "--target", "ps2_recomp", "--parallel", str(jobs)], env=env)
+    dest = tools_dir / "ps2recomp" / exe("ps2_recomp", target)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(recomp / "ps2xRecomp" / dest.name, dest)
+    # Run once, so a library it would miss on a player's machine shows here.
+    # Without a config it prints its usage and exits with 1; a crash or a
+    # missing library exits otherwise.
+    usage = subprocess.run([str(dest)], capture_output=True, text=True)
+    if usage.returncode != 1 or "PS2Recomp" not in usage.stdout:
+        sys.exit(f"payload: {dest} did not run: exit code {usage.returncode}, "
+                 f"output {usage.stdout!r}, errors {usage.stderr!r}")
+    if target.startswith("macos"):
+        libraries = subprocess.run(["otool", "-L", str(dest)], check=True, capture_output=True, text=True).stdout
+        if "/opt/homebrew/" in libraries or "/usr/local/" in libraries:
+            sys.exit(f"payload: the recompiler links libraries players do not have:\n{libraries}")
+    return dest
+
+
 def harvest_fetch(source: Path, work: Path, fetch_dir: Path, tools: dict, deps: Path, env: dict,
                   target: str) -> list:
     """Configures the recompiler and the game once, as the launcher will, and
     keeps the sources FetchContent cloned."""
     recomp = work / "recomp"
-    run([tools["cmake"], "-S", source / "thirdparty" / "PS2Recomp", "-B", recomp, "-G", "Ninja",
-         "-DCMAKE_BUILD_TYPE=Release", "-DPS2X_BUILD_RUNTIME=OFF", "-DPS2X_BUILD_STUDIO=OFF",
-         "-DPS2X_BUILD_TEST=OFF"], env=env)
+    run([tools["cmake"], "-S", source / "thirdparty" / "PS2Recomp", "-B", recomp, "-G", "Ninja"]
+        + recompiler_args(source, target), env=env)
     # The game configures against a stand-in corpus: what it fetches does not
     # depend on the translated code. Overlays fetch nothing more.
     stub = work / "stub-generated"
@@ -363,7 +414,7 @@ def main() -> None:
     args = parser.parse_args()
 
     target = host_platform()
-    if target not in PYTHON:
+    if target not in PYTHON and target != "windows-x86_64":
         sys.exit(f"payload: no pins for {target}")
     out = args.out.resolve()
     if out.exists():
@@ -379,11 +430,15 @@ def main() -> None:
 
     tools_dir = out / "tools"
     licenses = out / "licenses"
-    triple, sha = PYTHON[target]
-    name = f"cpython-{PYTHON_VERSION}+{PYTHON_RELEASE}-{triple}-install_only_stripped.tar.gz"
-    url = (f"https://github.com/astral-sh/python-build-standalone/releases/download/{PYTHON_RELEASE}/"
-           + name.replace("+", "%2B"))
-    untar(fetch(url, sha, cache), tools_dir)  # unpacks python/
+    if target.startswith("windows"):
+        # A NuGet package is a zip; its tools/ is the installation.
+        unpack_wheel(fetch(WINDOWS_PYTHON[1], WINDOWS_PYTHON[2], cache), "tools/", tools_dir / "python")
+    else:
+        triple, sha = PYTHON[target]
+        name = f"cpython-{PYTHON_VERSION}+{PYTHON_RELEASE}-{triple}-install_only_stripped.tar.gz"
+        url = (f"https://github.com/astral-sh/python-build-standalone/releases/download/{PYTHON_RELEASE}/"
+               + name.replace("+", "%2B"))
+        untar(fetch(url, sha, cache), tools_dir)  # unpacks python/
     # The shallowest one is CPython's own; deeper ones belong to bundled packages.
     found = sorted((tools_dir / "python").rglob("LICENSE.txt"), key=lambda path: len(path.parts))
     if not found:
@@ -423,7 +478,11 @@ def main() -> None:
         shutil.rmtree(deps / unused, ignore_errors=True)
 
     fetched = harvest_fetch(out / "source", work, out / "fetch", tools, deps, env, target)
+    recompiler = build_recompiler(work / "recomp", tools_dir, tools, env, target, args.jobs)
     prune(out, target)
+    # What the translation's scripts import, after the pruning: a release once
+    # went out without threading.
+    run([python, "-I", "-c", "import hashlib, json, subprocess, threading"])
 
     manifest = {
         "version": version,
@@ -434,8 +493,10 @@ def main() -> None:
             "cmake": str(tools["cmake_bin"].relative_to(out).as_posix()),
             "ninja": str(tools["ninja_bin"].relative_to(out).as_posix()),
             "pkgconf": str(pkgconf.relative_to(out).as_posix()),
+            "recompiler": str(recompiler.relative_to(out).as_posix()),
         },
-        "versions": {"Python": PYTHON_VERSION, "CMake": WHEELS["cmake"][0], "Ninja": WHEELS["ninja"][0],
+        "versions": {"Python": WINDOWS_PYTHON[0] if target.startswith("windows") else PYTHON_VERSION,
+                     "CMake": WHEELS["cmake"][0], "Ninja": WHEELS["ninja"][0],
                      "pkgconf": WHEELS["pkgconf"][0], "SDL3": SDL3[0]}
                     | ({} if target.startswith("windows") else {"FFmpeg": FFMPEG[0]}),
         "fetched": fetched,

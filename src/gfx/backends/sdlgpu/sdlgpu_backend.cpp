@@ -3368,6 +3368,7 @@ bool SdlGpuBackend::openWindow(const char *title, uint32_t width, uint32_t heigh
         error = std::string("SDL_CreateWindow: ") + SDL_GetError();
         return false;
     }
+    setWindowIcon(m_impl->window);
     if (!SDL_ClaimWindowForGPUDevice(m_impl->device.handle(), m_impl->window)) {
         error = std::string("SDL_ClaimWindowForGPUDevice: ") + SDL_GetError();
         SDL_DestroyWindow(m_impl->window);

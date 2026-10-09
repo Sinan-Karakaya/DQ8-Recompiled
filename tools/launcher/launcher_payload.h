@@ -22,6 +22,9 @@ struct Payload {
     std::string platform; // "macos-arm64"
     std::filesystem::path source, fetch, deps;
     std::filesystem::path python, cmakeBin, ninjaBin, pkgconf;
+    // ps2_recomp, built from `source`; empty when the payload has none, or no
+    // longer has it, and the launcher builds it then.
+    std::filesystem::path recompiler;
     std::vector<std::pair<std::string, std::string>> versions; // {"CMake", "4.4.4"}
     std::vector<std::string> fetched;                          // "glslang-src"
 };

@@ -6,6 +6,7 @@
 // no window, printing progress. --snapshot draws the live pages into PNGs
 // without saving anything; --preview draws every page with fixed states for
 // the documentation, and --smoke draws them once.
+#include "gfx/backends/sdlgpu/sdlgpu_window.h"
 #include "launcher_app.h"
 #include "launcher_iso.h"
 #include "ui/ui_style.h"
@@ -244,6 +245,7 @@ int main(int argc, char **argv) {
     }
     if (!previewing)
         SDL_SetWindowMinimumSize(window, 900, 640);
+    gfx::setWindowIcon(window);
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();

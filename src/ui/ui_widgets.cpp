@@ -137,11 +137,15 @@ bool beginSettings(const char *id) {
     return true;
 }
 
-void settingRow(const char *label, const char *help) {
+void settingRow(const char *label, const char *help, const char *chipText) {
     ImGui::TableNextRow(ImGuiTableRowFlags_None, ImGui::GetFrameHeight() + em(0.35f));
     ImGui::TableNextColumn();
     ImGui::AlignTextToFramePadding();
     ImGui::TextUnformatted(label);
+    if (chipText) {
+        ImGui::SameLine(0.0f, em(0.5f));
+        chip(chipText, palette::kWarn);
+    }
     if (help) {
         ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 0.84f);
         ImGui::PushStyleColor(ImGuiCol_Text, ImGui::ColorConvertU32ToFloat4(palette::kTextMuted));
@@ -254,6 +258,26 @@ void keycap(const char *text) {
     list->AddRectFilled(min, max, IM_COL32(255, 255, 255, 34), rounding);
     list->AddRect(min, max, IM_COL32(255, 255, 255, 84), rounding, 1.0f);
     centeredText(list, min, max, palette::kText, text);
+    ImGui::PopFont();
+}
+
+void chip(const char *text, ImU32 color) {
+    // One frame tall, as keycap is, to line up with framed text beside it.
+    const float frame = ImGui::GetFrameHeight();
+    ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 0.72f);
+    const ImVec2 textSize = ImGui::CalcTextSize(text);
+    const float height = std::floor(textSize.y + em(0.5f));
+    const float width = std::floor(textSize.x + em(1.2f));
+    if (ImGui::GetContentRegionAvail().x < width)
+        ImGui::NewLine();
+    const ImVec2 at = ImGui::GetCursorScreenPos();
+    ImGui::Dummy(ImVec2(width, frame));
+    const ImVec2 min(at.x, std::floor(at.y + (frame - height) * 0.5f));
+    const ImVec2 max(min.x + width, min.y + height);
+    ImDrawList *list = ImGui::GetWindowDrawList();
+    list->AddRectFilled(min, max, withAlpha(color, 0.14f), height * 0.5f);
+    list->AddRect(min, max, withAlpha(color, 0.75f), height * 0.5f, 1.0f);
+    centeredText(list, min, max, color, text);
     ImGui::PopFont();
 }
 

@@ -1054,7 +1054,8 @@ void LauncherApp::drawToolsPage() {
 }
 
 void LauncherApp::drawOptionsPage() {
-    title("Options", "You can change these later, too: press F1 in the game for its menu.");
+    title("Options", "Nothing here is final: you can change any of these at any time, here or in the game's "
+                     "menu (press F1 while playing).");
     ui::sectionHeader("Files");
     if (ui::beginSettings("files")) {
         ui::settingRow("Game files", "The disc's files are copied here; your saves live with them.");
@@ -1084,13 +1085,24 @@ void LauncherApp::drawOptionsPage() {
     ui::sectionHeader("Picture");
     if (ui::beginSettings("picture")) {
         bool changed = false;
-        ui::settingRow("Internal resolution", "A multiple of the PS2's own resolution.");
+        // Above 1x and at 16:9 the game is not at its best yet: worth trying,
+        // and easy to take back.
+        const auto experimentalNote = [] {
+            ImGui::PushFont(nullptr, ImGui::GetStyle().FontSizeBase * 0.84f);
+            wrapped(palette::kWarn, "Experimental for now: the game may run slower or look wrong in places. "
+                                     "You can switch back at any time.");
+            ImGui::PopFont();
+        };
+        ui::settingRow("Internal resolution", "A multiple of the PS2's own resolution. Above 1x is experimental.",
+                       "Experimental");
         static const char *const scales[] = {"1x", "2x", "3x", "4x"};
         int scale = std::clamp(static_cast<int>(m_gameSettings.resolutionScale), 1, 4) - 1;
         if (ui::segmented("scale", &scale, scales, 4)) {
             m_gameSettings.resolutionScale = static_cast<uint32_t>(scale + 1);
             changed = true;
         }
+        if (scale > 0)
+            experimentalNote();
         ui::settingRow("Window");
         static const char *const modes[] = {"Windowed", "Fullscreen"};
         int mode = m_gameSettings.fullscreen ? 1 : 0;
@@ -1098,13 +1110,16 @@ void LauncherApp::drawOptionsPage() {
             m_gameSettings.fullscreen = mode == 1;
             changed = true;
         }
-        ui::settingRow("Aspect ratio", "Auto follows the game's own Screen Size option.");
+        ui::settingRow("Aspect ratio", "Auto follows the game's own Screen Size option. 16:9 is experimental.",
+                       "Experimental");
         static const char *const aspects[] = {"Auto", "4:3", "16:9"};
         int aspect = std::min(static_cast<int>(m_gameSettings.display.aspect), 2);
         if (ui::segmented("aspect", &aspect, aspects, 3)) {
             m_gameSettings.display.aspect = static_cast<gfx::SdlGpuAspect>(aspect);
             changed = true;
         }
+        if (m_gameSettings.display.aspect == gfx::SdlGpuAspect::Wide)
+            experimentalNote();
         if (changed)
             writeGameSettings();
         ui::endSettings();
@@ -1189,6 +1204,12 @@ void LauncherApp::drawBuildPage() {
         if (stage.status == StageState::Status::Running) {
             ImGui::SetCursorScreenPos(ImVec2(at.x + em(1.8f), ImGui::GetCursorScreenPos().y + em(0.1f)));
             progressBar(stage.progress, em(0.32f), m_time);
+            if (!stage.note.empty()) {
+                ImGui::SetCursorScreenPos(ImVec2(at.x + em(1.8f), ImGui::GetCursorScreenPos().y + em(0.15f)));
+                ui::icon(Icon::Info, em(1.1f), palette::kGold);
+                ImGui::SameLine(0.0f, em(0.4f));
+                wrapped(palette::kText, stage.note);
+            }
         }
         ImGui::Dummy(ImVec2(0.0f, em(0.25f)));
     }
