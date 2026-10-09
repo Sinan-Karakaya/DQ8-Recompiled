@@ -3,6 +3,8 @@
 #include "runtime/gs/ps2_gs_memory.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace dq8::gfx {
