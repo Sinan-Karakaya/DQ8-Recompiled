@@ -11,6 +11,7 @@ layout(location = 1) in vec2 inDepthQ;    // normalised depth, Q
 layout(location = 2) in vec2 inTexCoord;  // S/T, or U/V in texels when FST
 layout(location = 3) in vec4 inColor;
 layout(location = 4) in float inFog;
+layout(location = 5) in uvec2 inTexelRange;  // see GsGpuVertex
 
 layout(set = 1, binding = 0) uniform VertexParams {
     // xy: render target size in GS pixels. zw: its reciprocal.
@@ -25,6 +26,7 @@ layout(location = 0) noperspective out vec2 vTexCoord;
 layout(location = 1) noperspective out float vQ;
 layout(location = 2) noperspective out vec4 vColor;
 layout(location = 3) noperspective out float vFog;
+layout(location = 4) flat out uvec2 vTexelRange;
 
 void main() {
     vec2 normalised = (inPosition + params.adjust.xy) * params.targetSize.zw;
@@ -39,4 +41,5 @@ void main() {
     vQ = inDepthQ.y;
     vColor = inColor;
     vFog = inFog;
+    vTexelRange = inTexelRange;
 }

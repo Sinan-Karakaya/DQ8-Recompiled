@@ -42,6 +42,8 @@ GsBlendTranslation gsTranslateBlend(const GsAlphaState &alpha, bool blendEnabled
 // is nearer.
 SDL_GPUCompareOp gsTranslateDepthCompare(GsDepthTest test, bool enabled);
 
+inline constexpr uint32_t kNoTexelRange = 0xffffffffu;
+
 // One vertex as the pipeline consumes it. Positions stay in GS window pixels
 // so resolution scaling is entirely a viewport concern.
 struct GsGpuVertex {
@@ -56,10 +58,13 @@ struct GsGpuVertex {
     float b = 0.0f;
     float a = 0.0f;
     float fog = 1.0f;
-    float pad = 0.0f;
+    // First texel in the low 16 bits, last in the high: the texels the GS
+    // samples across the primitive, so upscaled samples stay within them.
+    uint32_t texelRangeU = kNoTexelRange;
+    uint32_t texelRangeV = kNoTexelRange;
 };
 
-static_assert(sizeof(GsGpuVertex) == 48u, "vertex layout must match gs_draw.vert");
+static_assert(sizeof(GsGpuVertex) == 52u, "vertex layout must match gs_draw.vert");
 
 // Uniform blocks, laid out to match the two shaders.
 struct GsVertexUniforms {

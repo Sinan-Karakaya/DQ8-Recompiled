@@ -16,6 +16,8 @@ layout(location = 0) noperspective in vec2 vTexCoord;
 layout(location = 1) noperspective in float vQ;
 layout(location = 2) noperspective in vec4 vColor;
 layout(location = 3) noperspective in float vFog;
+// First and last texel the GS samples, per axis, packed low/high 16 bits.
+layout(location = 4) flat in uvec2 vTexelRange;
 
 layout(set = 2, binding = 0) uniform sampler2D gsTexture;
 #ifdef DQ8_FRAMEBUFFER_FETCH
@@ -54,6 +56,7 @@ const uint FLAG_FGE = 1u << 3u;
 const uint FLAG_ATE = 1u << 4u;
 const uint FLAG_LINEAR = 1u << 5u;
 const uint FLAG_NATIVE_GRID = 1u << 6u;
+const uint NO_TEXEL_RANGE = 0xffffffffu;
 
 const uint WRAP_REPEAT = 0u;
 const uint WRAP_CLAMP = 1u;
@@ -172,7 +175,13 @@ vec4 sampleTexture() {
     }
 
     if ((params.control.x & FLAG_LINEAR) == 0u) {
-        const vec2 base = floor(texel + POINT_SAMPLE_BIAS);
+        vec2 base = floor(texel + POINT_SAMPLE_BIAS);
+        // Upscaled samples between the GS's own ones, but not past the last:
+        // DQ8's glyph sprites span a texel more than the GS reaches.
+        if (vTexelRange.x != NO_TEXEL_RANGE)
+            base.x = clamp(base.x, float(vTexelRange.x & 65535u), float(vTexelRange.x >> 16u));
+        if (vTexelRange.y != NO_TEXEL_RANGE)
+            base.y = clamp(base.y, float(vTexelRange.y & 65535u), float(vTexelRange.y >> 16u));
         return fetchTexelAt(ivec2(base), texel - base);
     }
 

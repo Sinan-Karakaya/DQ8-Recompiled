@@ -761,12 +761,13 @@ SDL_GPUGraphicsPipeline *SdlGpuDevice::pipeline(const GsPipelineKey &key, std::s
     if (auto found = m_pipelines.find(key); found != m_pipelines.end())
         return found->second;
 
-    static constexpr std::array<SDL_GPUVertexAttribute, 5> kAttributes{{
+    static constexpr std::array<SDL_GPUVertexAttribute, 6> kAttributes{{
         {0u, 0u, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, offsetof(GsGpuVertex, x)},
         {1u, 0u, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, offsetof(GsGpuVertex, z)},
         {2u, 0u, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2, offsetof(GsGpuVertex, s)},
         {3u, 0u, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT4, offsetof(GsGpuVertex, r)},
         {4u, 0u, SDL_GPU_VERTEXELEMENTFORMAT_FLOAT, offsetof(GsGpuVertex, fog)},
+        {5u, 0u, SDL_GPU_VERTEXELEMENTFORMAT_UINT2, offsetof(GsGpuVertex, texelRangeU)},
     }};
     const SDL_GPUVertexBufferDescription bufferDescription{
         0u, sizeof(GsGpuVertex), SDL_GPU_VERTEXINPUTRATE_VERTEX, 0u};
