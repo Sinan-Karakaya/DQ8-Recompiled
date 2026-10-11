@@ -191,6 +191,19 @@ private:
     SDL_GPUTexture *m_index8Palette = nullptr;
     SDL_GPUTexture *m_index8Placement = nullptr;
     SDL_GPUTransferBuffer *m_index8Upload = nullptr;
+    // Kept from one local copy to the next, grown as needed and cycled by SDL
+    // while the GPU still reads them: on Vulkan each new transfer buffer was
+    // its own memory allocation, and a frame can do hundreds of copies.
+    bool reserveLocalCopy(uint32_t snapshotWidth, uint32_t snapshotHeight, uint32_t mappingWidth,
+                          uint32_t mappingHeight, std::string &error);
+    void releaseLocalCopy();
+    SDL_GPUTexture *m_localCopySnapshot = nullptr;
+    SDL_GPUTexture *m_localCopyMapping = nullptr;
+    SDL_GPUTransferBuffer *m_localCopyUpload = nullptr;
+    uint32_t m_localCopySnapshotWidth = 0u;
+    uint32_t m_localCopySnapshotHeight = 0u;
+    uint32_t m_localCopyMappingWidth = 0u;
+    uint32_t m_localCopyMappingHeight = 0u;
     std::unordered_map<GsPipelineKey, SDL_GPUGraphicsPipeline *, GsPipelineKeyHash> m_pipelines;
 };
 
