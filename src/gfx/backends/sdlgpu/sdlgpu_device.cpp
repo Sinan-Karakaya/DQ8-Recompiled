@@ -279,6 +279,7 @@ void SdlGpuDevice::destroy() {
         SDL_ReleaseGPUGraphicsPipeline(m_device, m_displayPipeline);
     m_displayPipeline = nullptr;
     releaseIndex8();
+    releaseLocalCopy();
     if (m_sampler)
         SDL_ReleaseGPUSampler(m_device, m_sampler);
     if (m_fragmentShader)
@@ -458,45 +459,19 @@ bool SdlGpuDevice::localCopy(SDL_GPUTexture *source, SDL_GPUTexture *destination
     }
 
     scale = std::max(scale, 1u);
-    // Released at once: SDL keeps them alive until the GPU is done with them.
-    SDL_GPUTextureCreateInfo snapshotInfo{};
-    snapshotInfo.type = SDL_GPU_TEXTURETYPE_2D;
-    snapshotInfo.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
-    snapshotInfo.width = width * scale;
-    snapshotInfo.height = height * scale;
-    snapshotInfo.layer_count_or_depth = 1u;
-    snapshotInfo.num_levels = 1u;
-    snapshotInfo.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
-    SDL_GPUTexture *snapshot = SDL_CreateGPUTexture(m_device, &snapshotInfo);
-    SDL_GPUTextureCreateInfo mappingInfo = snapshotInfo;
-    mappingInfo.format = SDL_GPU_TEXTUREFORMAT_R32G32B32A32_UINT;
-    mappingInfo.width = static_cast<uint32_t>(box.w);
-    mappingInfo.height = static_cast<uint32_t>(box.h);
-    SDL_GPUTexture *mappingTexture = SDL_CreateGPUTexture(m_device, &mappingInfo);
-    SDL_GPUTransferBufferCreateInfo uploadInfo{};
-    uploadInfo.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
-    uploadInfo.size = static_cast<uint32_t>(mapping.size() * sizeof(uint32_t));
-    SDL_GPUTransferBuffer *upload = SDL_CreateGPUTransferBuffer(m_device, &uploadInfo);
-    const auto release = [&] {
-        if (snapshot)
-            SDL_ReleaseGPUTexture(m_device, snapshot);
-        if (mappingTexture)
-            SDL_ReleaseGPUTexture(m_device, mappingTexture);
-        if (upload)
-            SDL_ReleaseGPUTransferBuffer(m_device, upload);
-    };
+    if (!reserveLocalCopy(width * scale, height * scale, static_cast<uint32_t>(box.w),
+                          static_cast<uint32_t>(box.h), error))
+        return false;
     const auto fail = [&](const char *what) {
         error = std::string(what) + ": " + SDL_GetError();
-        release();
         return false;
     };
-    if (!snapshot || !mappingTexture || !upload)
-        return fail("SDL_CreateGPU*(local copy)");
-    void *mapped = SDL_MapGPUTransferBuffer(m_device, upload, false);
+    // Cycled: a copy the GPU has not finished keeps the old contents.
+    void *mapped = SDL_MapGPUTransferBuffer(m_device, m_localCopyUpload, true);
     if (!mapped)
         return fail("SDL_MapGPUTransferBuffer(local copy)");
     std::memcpy(mapped, mapping.data(), mapping.size() * sizeof(uint32_t));
-    SDL_UnmapGPUTransferBuffer(m_device, upload);
+    SDL_UnmapGPUTransferBuffer(m_device, m_localCopyUpload);
 
     SDL_GPUCommandBuffer *commands = SDL_AcquireGPUCommandBuffer(m_device);
     if (!commands)
@@ -509,16 +484,16 @@ bool SdlGpuDevice::localCopy(SDL_GPUTexture *source, SDL_GPUTexture *destination
     SDL_GPUTextureLocation from{};
     from.texture = destination;
     SDL_GPUTextureLocation to{};
-    to.texture = snapshot;
-    SDL_CopyGPUTextureToTexture(copy, &from, &to, width * scale, height * scale, 1u, false);
-    const SDL_GPUTextureTransferInfo mappingFrom{upload, 0u, static_cast<uint32_t>(box.w),
+    to.texture = m_localCopySnapshot;
+    SDL_CopyGPUTextureToTexture(copy, &from, &to, width * scale, height * scale, 1u, true);
+    const SDL_GPUTextureTransferInfo mappingFrom{m_localCopyUpload, 0u, static_cast<uint32_t>(box.w),
                                                  static_cast<uint32_t>(box.h)};
     SDL_GPUTextureRegion mappingTo{};
-    mappingTo.texture = mappingTexture;
+    mappingTo.texture = m_localCopyMapping;
     mappingTo.w = static_cast<uint32_t>(box.w);
     mappingTo.h = static_cast<uint32_t>(box.h);
     mappingTo.d = 1u;
-    SDL_UploadToGPUTexture(copy, &mappingFrom, &mappingTo, false);
+    SDL_UploadToGPUTexture(copy, &mappingFrom, &mappingTo, true);
     SDL_EndGPUCopyPass(copy);
 
     SDL_GPUColorTargetInfo target{};
@@ -537,22 +512,89 @@ bool SdlGpuDevice::localCopy(SDL_GPUTexture *source, SDL_GPUTexture *destination
     const SDL_Rect scissor{box.x * int(scale), box.y * int(scale), box.w * int(scale), box.h * int(scale)};
     SDL_SetGPUScissor(pass, &scissor);
     const SDL_GPUTextureSamplerBinding bindings[3] = {
-        {source == destination ? snapshot : source, m_sampler},
-        {snapshot, m_sampler},
-        {mappingTexture, m_sampler},
+        {source == destination ? m_localCopySnapshot : source, m_sampler},
+        {m_localCopySnapshot, m_sampler},
+        {m_localCopyMapping, m_sampler},
     };
     SDL_BindGPUFragmentSamplers(pass, 0u, bindings, 3u);
     const uint32_t control[4] = {scale, static_cast<uint32_t>(box.x), static_cast<uint32_t>(box.y), 0u};
     SDL_PushGPUFragmentUniformData(commands, 0u, control, sizeof(control));
     SDL_DrawGPUPrimitives(pass, 3u, 1u, 0u, 0u);
     SDL_EndGPURenderPass(pass);
-    const bool submitted = SDL_SubmitGPUCommandBuffer(commands);
-    release();
-    if (!submitted) {
-        error = std::string("SDL_SubmitGPUCommandBuffer(local copy): ") + SDL_GetError();
-        return false;
+    if (!SDL_SubmitGPUCommandBuffer(commands))
+        return fail("SDL_SubmitGPUCommandBuffer(local copy)");
+    return true;
+}
+
+bool SdlGpuDevice::reserveLocalCopy(uint32_t snapshotWidth, uint32_t snapshotHeight, uint32_t mappingWidth,
+                                    uint32_t mappingHeight, std::string &error) {
+    // Larger than a copy needs is fine: the shader fetches the snapshot at the
+    // destination's own coordinates and the mapping at box-relative ones.
+    if (m_localCopySnapshot &&
+        (snapshotWidth > m_localCopySnapshotWidth || snapshotHeight > m_localCopySnapshotHeight)) {
+        SDL_ReleaseGPUTexture(m_device, m_localCopySnapshot);
+        m_localCopySnapshot = nullptr;
+    }
+    if (!m_localCopySnapshot) {
+        m_localCopySnapshotWidth = std::max(snapshotWidth, m_localCopySnapshotWidth);
+        m_localCopySnapshotHeight = std::max(snapshotHeight, m_localCopySnapshotHeight);
+        SDL_GPUTextureCreateInfo info{};
+        info.type = SDL_GPU_TEXTURETYPE_2D;
+        info.format = SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM;
+        info.width = m_localCopySnapshotWidth;
+        info.height = m_localCopySnapshotHeight;
+        info.layer_count_or_depth = 1u;
+        info.num_levels = 1u;
+        info.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
+        m_localCopySnapshot = SDL_CreateGPUTexture(m_device, &info);
+        if (!m_localCopySnapshot) {
+            error = std::string("SDL_CreateGPUTexture(local copy snapshot): ") + SDL_GetError();
+            return false;
+        }
+    }
+    if (m_localCopyMapping &&
+        (mappingWidth > m_localCopyMappingWidth || mappingHeight > m_localCopyMappingHeight)) {
+        SDL_ReleaseGPUTexture(m_device, m_localCopyMapping);
+        SDL_ReleaseGPUTransferBuffer(m_device, m_localCopyUpload);
+        m_localCopyMapping = nullptr;
+        m_localCopyUpload = nullptr;
+    }
+    if (!m_localCopyMapping) {
+        m_localCopyMappingWidth = std::max(mappingWidth, m_localCopyMappingWidth);
+        m_localCopyMappingHeight = std::max(mappingHeight, m_localCopyMappingHeight);
+        SDL_GPUTextureCreateInfo info{};
+        info.type = SDL_GPU_TEXTURETYPE_2D;
+        info.format = SDL_GPU_TEXTUREFORMAT_R32G32B32A32_UINT;
+        info.width = m_localCopyMappingWidth;
+        info.height = m_localCopyMappingHeight;
+        info.layer_count_or_depth = 1u;
+        info.num_levels = 1u;
+        info.usage = SDL_GPU_TEXTUREUSAGE_SAMPLER;
+        m_localCopyMapping = SDL_CreateGPUTexture(m_device, &info);
+        SDL_GPUTransferBufferCreateInfo upload{};
+        upload.usage = SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD;
+        upload.size = m_localCopyMappingWidth * m_localCopyMappingHeight * 4u * sizeof(uint32_t);
+        m_localCopyUpload = SDL_CreateGPUTransferBuffer(m_device, &upload);
+        if (!m_localCopyMapping || !m_localCopyUpload) {
+            error = std::string("SDL_CreateGPU*(local copy mapping): ") + SDL_GetError();
+            releaseLocalCopy();
+            return false;
+        }
     }
     return true;
+}
+
+void SdlGpuDevice::releaseLocalCopy() {
+    if (m_localCopySnapshot)
+        SDL_ReleaseGPUTexture(m_device, m_localCopySnapshot);
+    if (m_localCopyMapping)
+        SDL_ReleaseGPUTexture(m_device, m_localCopyMapping);
+    if (m_localCopyUpload)
+        SDL_ReleaseGPUTransferBuffer(m_device, m_localCopyUpload);
+    m_localCopySnapshot = m_localCopyMapping = nullptr;
+    m_localCopyUpload = nullptr;
+    m_localCopySnapshotWidth = m_localCopySnapshotHeight = 0u;
+    m_localCopyMappingWidth = m_localCopyMappingHeight = 0u;
 }
 
 bool SdlGpuDevice::createIndex8(std::string &error) {
