@@ -1956,6 +1956,104 @@ bool undersizedLiveTargetCase(Harness &harness) {
     return true;
 }
 
+// DQ8's font maps 23 texels onto 22 pixels, so the GS never samples the 23rd
+// column: the next glyph. Upscaled, each sub-pixel samples its own position,
+// which keeps the finer texel edges, but must stay within the texels the GS
+// itself reached. Checked on the presented image, sub-pixel by sub-pixel.
+bool upscaledGlyphCase(Harness &harness) {
+    constexpr uint32_t kTextureBlock = 200u << 5u;
+    constexpr int kX = 8, kY = 6, kSize = 22;
+    auto texel = [](uint32_t x, uint32_t y) {
+        return rgba(static_cast<uint8_t>(x * 8u), static_cast<uint8_t>(y * 8u), 0x40u, 0x80u);
+    };
+    struct Variant {
+        const char *name;
+        uint16_t first, last;  // UV at the sprite's two edges, 1/16 texel
+    };
+    const Variant variants[] = {
+        {"23 texels over 22 pixels", 0u, 23u * 16u},
+        {"mirrored", 23u * 16u, 0u},
+        {"magnified", 3u * 16u, 11u * 16u},
+    };
+    const auto display = [](uint32_t width, uint32_t height) {
+        return (uint64_t(width - 1u) << 32u) | (uint64_t(height - 1u) << 44u);
+    };
+    for (const Variant &variant : variants) {
+        uint32_t low = 31u, high = 0u;
+        for (uint32_t scale : {1u, 2u, 3u}) {
+            harness.gpu->setResolutionScale(scale);
+            harness.begin();
+            dq8::gfx::GsVram writer, cpuWriter;
+            writer.attach(harness.gpuVram.data(), kVramBytes);
+            cpuWriter.attach(harness.cpuVram.data(), kVramBytes);
+            for (uint32_t y = 0u; y < 32u; ++y)
+                for (uint32_t x = 0u; x < 32u; ++x) {
+                    writer.write(GS_PSM_CT32, kTextureBlock, 1u, x, y, texel(x, y));
+                    cpuWriter.write(GS_PSM_CT32, kTextureBlock, 1u, x, y, texel(x, y));
+                }
+            GSDrawState state = baseState();
+            state.prim.tme = state.prim.fst = true;
+            state.context.tex0.tbp0 = kTextureBlock;
+            state.context.tex0.tbw = 1u;
+            state.context.tex0.psm = GS_PSM_CT32;
+            state.context.tex0.tw = state.context.tex0.th = 5u;
+            state.context.tex0.tfx = state.context.tex0.tcc = 1u;
+            state.textureWidth = state.textureHeight = 32u;
+            GSPrimitiveBatch glyph = spriteBatch(state, kX, kY, kX + kSize, kY + kSize, 0x80808080u);
+            glyph.vertices[0].u = glyph.vertices[0].v = variant.first;
+            glyph.vertices[1].u = glyph.vertices[1].v = variant.last;
+            harness.submit(glyph);
+            harness.finish();
+            if (reportBackendError(harness, "upscaled glyph"))
+                return false;
+
+            // The GS's own samples: the 1x image. (The software renderer
+            // steps sprite UVs differently, so it is no reference here.)
+            for (uint32_t x = kX; scale == 1u && x < kX + kSize; ++x) {
+                const uint32_t got = harness.gpuPixel(x, kY + kSize / 2);
+                low = std::min(low, (got & 0xffu) / 8u);
+                high = std::max(high, (got & 0xffu) / 8u);
+            }
+
+            GSPresentationRequest request{};
+            request.pmode = 1u | (1u << 5u) | (0xffu << 8u);
+            request.dispfb1 = uint64_t(kFramePage) | (uint64_t(kFrameWidthBlocks) << 9u);
+            request.display1 = display(kSurfaceWidth, kSurfaceHeight);
+            const PresentationFrame frame = harness.gpu->Present(request);
+            if (reportBackendError(harness, "upscaled glyph") || !frame.HasHostPixels() ||
+                frame.width != kSurfaceWidth * scale) {
+                std::fprintf(stderr, "FAIL: upscaled glyph (%s, %ux): no %u-wide frame\n",
+                             variant.name, scale, kSurfaceWidth * scale);
+                return false;
+            }
+            const uint32_t pitch = frame.rowPitchBytes ? frame.rowPitchBytes : frame.width * 4u;
+            // Host pixel h samples GS position h / scale; the texel there,
+            // within the range the GS sampled.
+            auto expected = [&](uint32_t h, int origin) {
+                const double position = double(h) / scale - origin;
+                const double t = (variant.first + (double(variant.last) - variant.first) *
+                                  position / kSize) / 16.0;
+                return std::clamp(uint32_t(std::floor(t + 1.0 / 256.0)), low, high);
+            };
+            for (uint32_t hy = kY * scale; hy < (kY + kSize) * scale; ++hy)
+                for (uint32_t hx = kX * scale; hx < (kX + kSize) * scale; ++hx) {
+                    uint32_t pixel = 0u;
+                    std::memcpy(&pixel, frame.pixels.data() + size_t(hy) * pitch + size_t(hx) * 4u, 4u);
+                    const uint32_t wantX = expected(hx, kX), wantY = expected(hy, kY);
+                    if ((pixel & 0xffffu) != (texel(wantX, wantY) & 0xffffu)) {
+                        std::fprintf(stderr, "FAIL: upscaled glyph (%s, %ux): host pixel (%u,%u) "
+                                     "shows texel (%u,%u), want (%u,%u) of %u..%u\n",
+                                     variant.name, scale, hx, hy, (pixel & 0xffu) / 8u,
+                                     ((pixel >> 8u) & 0xffu) / 8u, wantX, wantY, low, high);
+                        return false;
+                    }
+                }
+        }
+    }
+    harness.gpu->setResolutionScale(1u);
+    return true;
+}
+
 } // namespace
 
 int main() {
@@ -1992,7 +2090,7 @@ int main() {
         !disjointHostInvalidationCase(harness) ||
         !paddedLiveTargetCase(harness) ||
         !partialTargetRefreshCase(harness) || !independentTargetResolveCase(harness) ||
-        !opaqueSpriteRefreshCase(harness))
+        !opaqueSpriteRefreshCase(harness) || !upscaledGlyphCase(harness))
         return 1;
 
     const dq8::gfx::SdlGpuStats stats = harness.gpu->stats();
