@@ -288,9 +288,11 @@ int main(int argc, char **argv)
             if (const char *trace = std::getenv("DQ8_GS_TRACE")) {
                 const char *start = std::getenv("DQ8_GS_TRACE_START");
                 const char *trigger = std::getenv("DQ8_GS_TRACE_TRIGGER");
+                const char *frames = std::getenv("DQ8_GS_TRACE_FRAMES");
                 backend = std::make_unique<dq8::gfx::GsTraceBackend>(
                     std::move(backend), trace, start ? std::strtoul(start, nullptr, 10) : 7550u,
-                    4u, trigger ? trigger : "");
+                    frames ? static_cast<uint32_t>(std::strtoul(frames, nullptr, 10)) : 4u,
+                    trigger ? trigger : "");
             }
             runtime.gs().setRasterBackend(dq8::diagnostics::wrapGsFanProbe(
                 std::move(backend), runtime.memory().getRDRAM(), PS2_RAM_SIZE));
