@@ -324,18 +324,23 @@ void futureFiles() {
     std::filesystem::remove_all(root, ec);
     std::filesystem::create_directories(root / "build" / "CMakeFiles", ec);
     std::filesystem::create_directories(root / ".git", ec);
+    std::filesystem::create_directories(root / "thirdparty" / "sub", ec);
     std::ofstream(root / "CMakeLists.txt") << "project(x)";
     std::ofstream(root / "build" / "CMakeFiles" / "CMakeSystem.cmake") << "set(x)";
     std::ofstream(root / "old.cpp") << "int x;";
     std::ofstream(root / ".git" / "HEAD") << "ref: refs/heads/main";
+    // A submodule's or a linked worktree's .git is a file.
+    std::ofstream(root / "thirdparty" / "sub" / ".git") << "gitdir: ../../.git/modules/sub";
     const auto now = std::filesystem::file_time_type::clock::now();
     const std::filesystem::path system = root / "build" / "CMakeFiles" / "CMakeSystem.cmake";
     std::filesystem::last_write_time(root / "CMakeLists.txt", now + std::chrono::hours(7), ec);
     std::filesystem::last_write_time(system, now + std::chrono::minutes(30), ec);
     std::filesystem::last_write_time(root / "old.cpp", now - std::chrono::hours(9), ec);
     std::filesystem::last_write_time(root / ".git" / "HEAD", now + std::chrono::hours(7), ec);
-    const FutureFiles moved = settleFutureFiles(root);
-    require(moved.count == 2u, "both files dated after now move, and only they: " + std::to_string(moved.count));
+    std::filesystem::last_write_time(root / "thirdparty" / "sub" / ".git", now + std::chrono::hours(7), ec);
+    const FutureFiles moved = settleFutureFiles({root});
+    require(moved.count == 2u && moved.failed == 0u,
+            "both files dated after now move, and only they: " + std::to_string(moved.count));
     require(moved.ahead > std::chrono::hours(6) && moved.ahead <= std::chrono::hours(7),
             "how far ahead the furthest was");
     const auto after = std::filesystem::file_time_type::clock::now();
@@ -344,9 +349,11 @@ void futureFiles() {
             "they now have the clock's time");
     require(std::filesystem::last_write_time(root / "old.cpp", ec) < now - std::chrono::hours(8),
             "an older file keeps its time");
-    require(std::filesystem::last_write_time(root / ".git" / "HEAD", ec) > now + std::chrono::hours(6),
-            "and .git is left alone");
-    require(settleFutureFiles(root).count == 0u, "a second pass finds nothing");
+    require(std::filesystem::last_write_time(root / ".git" / "HEAD", ec) > now + std::chrono::hours(6) &&
+                std::filesystem::last_write_time(root / "thirdparty" / "sub" / ".git", ec) >
+                    now + std::chrono::hours(6),
+            "and .git is left alone, folder or file");
+    require(settleFutureFiles({root}).count == 0u, "a second pass finds nothing");
     std::filesystem::remove_all(root, ec);
 }
 
