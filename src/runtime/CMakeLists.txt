@@ -82,9 +82,10 @@ if(DQ8_LINK_GENERATED)
         math(EXPR DQ8_GENERATED_PART_BEGIN "${DQ8_GENERATED_PART_BEGIN} + ${DQ8_GENERATED_PART_SIZE}")
     endwhile()
 
-    # Prefer lld for the large generated corpus.
+    # Prefer lld for the large generated corpus, except under GCC: lld cannot
+    # read the GCC LTO objects the runtime is archived as.
     find_program(DQ8_LLD_PROGRAM ld.lld)
-    if(DQ8_LLD_PROGRAM AND NOT APPLE)
+    if(DQ8_LLD_PROGRAM AND NOT APPLE AND NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         message(STATUS "dq8: using lld (${DQ8_LLD_PROGRAM}) to link the generated corpus")
         target_link_options(dq8 PRIVATE -fuse-ld=lld)
     endif()
