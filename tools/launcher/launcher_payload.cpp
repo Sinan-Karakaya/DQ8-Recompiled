@@ -50,7 +50,8 @@ uint64_t treeBytes(const std::filesystem::path &dir) {
     return bytes;
 }
 
-bool copyTree(const std::filesystem::path &from, const std::filesystem::path &to, uint64_t &done, uint64_t total,
+bool copyTree(const std::filesystem::path &from, const std::filesystem::path &to,
+              std::filesystem::file_time_type copied, uint64_t &done, uint64_t total,
               const std::function<bool(uint64_t, uint64_t)> &progress, std::string &error) {
     std::error_code ec;
     std::filesystem::create_directories(to, ec);
@@ -66,6 +67,14 @@ bool copyTree(const std::filesystem::path &from, const std::filesystem::path &to
         } else {
             std::filesystem::copy_file(it->path(), target, std::filesystem::copy_options::overwrite_existing,
                                        entryError);
+            // Windows keeps the download's time, which an unzip may have moved
+            // by the time zone. Earlier than the last build's objects, a changed
+            // file would not be compiled again; later than now, see
+            // settleFutureFiles.
+            if (!entryError) {
+                std::error_code timeError;
+                std::filesystem::last_write_time(target, copied, timeError);
+            }
             done += entryError ? 0u : it->file_size(entryError);
         }
         if (entryError) {
@@ -209,12 +218,42 @@ Unpacked unpackPayload(const Payload &payload, const std::filesystem::path &repo
         << "Made by the DQ8Recomp launcher, which replaces this folder's contents when it updates.\n";
     const uint64_t total = treeBytes(payload.source) + treeBytes(payload.fetch) + treeBytes(payload.deps);
     uint64_t done = 0u;
-    if (!copyTree(payload.source, repo, done, total, progress, error) ||
-        !copyTree(payload.fetch, build / "fetch", done, total, progress, error) ||
-        !copyTree(payload.deps, build / "deps", done, total, progress, error))
+    const auto copied = std::filesystem::file_time_type::clock::now();
+    if (!copyTree(payload.source, repo, copied, done, total, progress, error) ||
+        !copyTree(payload.fetch, build / "fetch", copied, done, total, progress, error) ||
+        !copyTree(payload.deps, build / "deps", copied, done, total, progress, error))
         return Unpacked::Failed;
     std::ofstream(build / kVersionMarker, std::ios::binary | std::ios::trunc) << payload.version << "\n";
     return Unpacked::Copied;
+}
+
+FutureFiles settleFutureFiles(const std::filesystem::path &dir) {
+    FutureFiles moved;
+    const auto now = std::filesystem::file_time_type::clock::now();
+    // FAT rounds a file written just now up to 2 s ahead.
+    const auto limit = now + std::chrono::minutes(1);
+    std::error_code ec;
+    for (auto it = std::filesystem::recursive_directory_iterator(
+             dir, std::filesystem::directory_options::skip_permission_denied, ec);
+         !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+        std::error_code entryError;
+        if (it->is_symlink(entryError))
+            continue;
+        if (it->is_directory(entryError)) {
+            if (it->path().filename() == ".git")
+                it.disable_recursion_pending();
+            continue;
+        }
+        const auto time = it->last_write_time(entryError);
+        if (entryError || time <= limit)
+            continue;
+        std::filesystem::last_write_time(it->path(), now, entryError);
+        if (entryError)
+            continue;
+        ++moved.count;
+        moved.ahead = std::max(moved.ahead, std::chrono::duration_cast<std::chrono::seconds>(time - now));
+    }
+    return moved;
 }
 
 } // namespace dq8::launcher

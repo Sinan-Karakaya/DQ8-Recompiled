@@ -284,9 +284,22 @@ void payloadUnpacking() {
                 args.end(),
             "the payload's own ninja, not one cached from a release unpacked elsewhere");
 
+    // An unzip west of UTC can date the download hours ahead, one east of it
+    // hours behind.
+    const auto beforeUnpack = std::filesystem::file_time_type::clock::now();
+    std::filesystem::last_write_time(payloadDir / "source" / "setup.py", beforeUnpack - std::chrono::hours(9), ec);
+    std::filesystem::last_write_time(payloadDir / "fetch" / "spirv_cross-src" / "CMakeLists.txt",
+                                     beforeUnpack + std::chrono::hours(7), ec);
     require(unpackPayload(*payload, repo, {}, error) == Unpacked::Copied, "the first unpack copies: " + error);
     require(std::filesystem::exists(repo / "setup.py") && std::filesystem::exists(repo / "build" / "deps" / "lib"),
             "the source tree and the libraries land in the workspace");
+    const auto afterUnpack = std::filesystem::file_time_type::clock::now();
+    for (const std::filesystem::path &copy : {repo / "setup.py", repo / "build" / "fetch" / "spirv_cross-src" /
+                                                                  "CMakeLists.txt"}) {
+        const auto time = std::filesystem::last_write_time(copy, ec);
+        require(time >= beforeUnpack - std::chrono::seconds(2) && time <= afterUnpack + std::chrono::seconds(2),
+                "a copy is dated when it was made, not when the download says: " + pathUtf8(copy));
+    }
     require(unpackPayload(*payload, repo, {}, error) == Unpacked::AlreadyThere, "the same version is not copied again");
     std::ofstream(repo / "build" / "kept.txt") << "a build";
     manifest("v2");
@@ -299,6 +312,41 @@ void payloadUnpacking() {
     std::filesystem::create_directories(checkout / ".git", ec);
     require(unpackPayload(*payload, checkout, {}, error) == Unpacked::Failed && std::filesystem::exists(checkout / ".git"),
             "a folder the launcher did not make is left alone");
+    std::filesystem::remove_all(root, ec);
+}
+
+// A file dated after now, among CMake's inputs, had ninja regenerate
+// build.ninja until it gave up; such files get now's time, other files and
+// .git keep theirs.
+void futureFiles() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "dq8-launcher-future";
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+    std::filesystem::create_directories(root / "build" / "CMakeFiles", ec);
+    std::filesystem::create_directories(root / ".git", ec);
+    std::ofstream(root / "CMakeLists.txt") << "project(x)";
+    std::ofstream(root / "build" / "CMakeFiles" / "CMakeSystem.cmake") << "set(x)";
+    std::ofstream(root / "old.cpp") << "int x;";
+    std::ofstream(root / ".git" / "HEAD") << "ref: refs/heads/main";
+    const auto now = std::filesystem::file_time_type::clock::now();
+    const std::filesystem::path system = root / "build" / "CMakeFiles" / "CMakeSystem.cmake";
+    std::filesystem::last_write_time(root / "CMakeLists.txt", now + std::chrono::hours(7), ec);
+    std::filesystem::last_write_time(system, now + std::chrono::minutes(30), ec);
+    std::filesystem::last_write_time(root / "old.cpp", now - std::chrono::hours(9), ec);
+    std::filesystem::last_write_time(root / ".git" / "HEAD", now + std::chrono::hours(7), ec);
+    const FutureFiles moved = settleFutureFiles(root);
+    require(moved.count == 2u, "both files dated after now move, and only they: " + std::to_string(moved.count));
+    require(moved.ahead > std::chrono::hours(6) && moved.ahead <= std::chrono::hours(7),
+            "how far ahead the furthest was");
+    const auto after = std::filesystem::file_time_type::clock::now();
+    require(std::filesystem::last_write_time(root / "CMakeLists.txt", ec) <= after &&
+                std::filesystem::last_write_time(system, ec) <= after,
+            "they now have the clock's time");
+    require(std::filesystem::last_write_time(root / "old.cpp", ec) < now - std::chrono::hours(8),
+            "an older file keeps its time");
+    require(std::filesystem::last_write_time(root / ".git" / "HEAD", ec) > now + std::chrono::hours(6),
+            "and .git is left alone");
+    require(settleFutureFiles(root).count == 0u, "a second pass finds nothing");
     std::filesystem::remove_all(root, ec);
 }
 
@@ -522,6 +570,7 @@ int main() try {
     progressAndVersions();
     compileCosts();
     payloadUnpacking();
+    futureFiles();
     builtMarker();
     configuredCompiler();
     childProcess();

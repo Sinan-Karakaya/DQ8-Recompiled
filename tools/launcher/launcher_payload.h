@@ -6,6 +6,7 @@
 
 #include "launcher_process.h"
 
+#include <chrono>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
@@ -43,10 +44,22 @@ ChildEnvironment payloadEnvironment(const Payload &payload, const std::filesyste
 std::vector<std::string> payloadCMakeArgs(const Payload &payload, const std::filesystem::path &repo);
 
 // Copies the source tree, fetched sources and libraries into repo unless this
-// version is there already, keeping repo/build. Refuses a folder it did not
-// make, such as a git checkout. progress(done, total) in bytes; false cancels.
+// version is there already, keeping repo/build. The copies are dated when they
+// were made. Refuses a folder it did not make, such as a git checkout.
+// progress(done, total) in bytes; false cancels.
 enum class Unpacked : uint8_t { Copied, AlreadyThere, Failed };
 Unpacked unpackPayload(const Payload &payload, const std::filesystem::path &repo,
                        const std::function<bool(uint64_t, uint64_t)> &progress, std::string &error);
+
+// Gives the files under dir dated after now, outside .git, now's time. A clock
+// set back leaves such files, and so does unzipping a release west of UTC with
+// a tool that reads the zip's DOS times, the CI runner's UTC, as local time.
+// Among CMake's inputs they kept build.ninja older however often CMake wrote
+// it: ninja regenerated it 100 times, some 40 minutes for the game, then gave up.
+struct FutureFiles {
+    uint64_t count = 0u;
+    std::chrono::seconds ahead{0}; // the furthest ahead one
+};
+FutureFiles settleFutureFiles(const std::filesystem::path &dir);
 
 } // namespace dq8::launcher

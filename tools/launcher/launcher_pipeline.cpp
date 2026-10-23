@@ -620,6 +620,23 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
         args.insert(args.end(), payloadArgs.begin(), payloadArgs.end());
         return args;
     };
+    // The workspace and the payload's CMake modules hold every input of the
+    // CMake configures, which a file dated after now would keep regenerating.
+    const auto settleTimes = [&] {
+        FutureFiles moved = settleFutureFiles(repo);
+        if (payload) {
+            const FutureFiles tools = settleFutureFiles(payload->cmakeBin.parent_path());
+            moved.count += tools.count;
+            moved.ahead = std::max(moved.ahead, tools.ahead);
+        }
+        if (moved.count > 0u) {
+            const long long minutes = std::max(1LL, static_cast<long long>(moved.ahead.count() / 60));
+            line(thousands(moved.count) + " files were dated up to " +
+                 (minutes >= 120 ? std::to_string(minutes / 60) + " hours" : std::to_string(minutes) + " minutes") +
+                 " after this computer's clock; they now have its time.");
+        }
+        return true;
+    };
     JsonValue hashes;
     std::string error;
     // A payload's tree is not unpacked yet; its hashes are the same.
@@ -698,7 +715,7 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
         runStage(Stage::UnpackSource, [&] {
             if (!payload) {
                 skip(Stage::UnpackSource, "Using this checkout");
-                return true;
+                return settleTimes();
             }
             switch (unpackPayload(*payload, repo,
                                   [&](uint64_t done, uint64_t total) {
@@ -707,8 +724,10 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
                                       return !m_cancel.load();
                                   },
                                   error)) {
-            case Unpacked::AlreadyThere: skip(Stage::UnpackSource, "Unpacked before"); return true;
-            case Unpacked::Copied: set(Stage::UnpackSource, 1.0, "Version " + payload->version); return true;
+            case Unpacked::AlreadyThere: skip(Stage::UnpackSource, "Unpacked before"); return settleTimes();
+            case Unpacked::Copied:
+                set(Stage::UnpackSource, 1.0, "Version " + payload->version);
+                return settleTimes();
             case Unpacked::Failed: break;
             }
             std::lock_guard lock(m_mutex);
