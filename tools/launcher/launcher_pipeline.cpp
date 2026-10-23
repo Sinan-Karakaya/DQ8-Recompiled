@@ -623,18 +623,19 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
     // The workspace and the payload's CMake modules hold every input of the
     // CMake configures, which a file dated after now would keep regenerating.
     const auto settleTimes = [&] {
-        FutureFiles moved = settleFutureFiles(repo);
-        if (payload) {
-            const FutureFiles tools = settleFutureFiles(payload->cmakeBin.parent_path());
-            moved.count += tools.count;
-            moved.ahead = std::max(moved.ahead, tools.ahead);
-        }
+        std::vector<std::filesystem::path> dirs = {repo};
+        if (payload)
+            dirs.push_back(payload->cmakeBin.parent_path());
+        const FutureFiles moved = settleFutureFiles(dirs);
         if (moved.count > 0u) {
             const long long minutes = std::max(1LL, static_cast<long long>(moved.ahead.count() / 60));
             line(thousands(moved.count) + " files were dated up to " +
                  (minutes >= 120 ? std::to_string(minutes / 60) + " hours" : std::to_string(minutes) + " minutes") +
                  " after this computer's clock; they now have its time.");
         }
+        if (moved.failed > 0u)
+            line(thousands(moved.failed) + " files dated after this computer's clock could not be changed, such as " +
+                 pathUtf8(moved.firstFailed) + ". If ninja stops with \"still dirty after 100 tries\", this is why.");
         return true;
     };
     JsonValue hashes;

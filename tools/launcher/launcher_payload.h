@@ -51,7 +51,7 @@ enum class Unpacked : uint8_t { Copied, AlreadyThere, Failed };
 Unpacked unpackPayload(const Payload &payload, const std::filesystem::path &repo,
                        const std::function<bool(uint64_t, uint64_t)> &progress, std::string &error);
 
-// Gives the files under dir dated after now, outside .git, now's time. A clock
+// Gives the files under dirs dated after now, outside .git, now's time. A clock
 // set back leaves such files, and so does unzipping a release west of UTC with
 // a tool that reads the zip's DOS times, the CI runner's UTC, as local time.
 // Among CMake's inputs they kept build.ninja older however often CMake wrote
@@ -59,7 +59,10 @@ Unpacked unpackPayload(const Payload &payload, const std::filesystem::path &repo
 struct FutureFiles {
     uint64_t count = 0u;
     std::chrono::seconds ahead{0}; // the furthest ahead one
+    // Dated after now, but their time could not be set.
+    uint64_t failed = 0u;
+    std::filesystem::path firstFailed;
 };
-FutureFiles settleFutureFiles(const std::filesystem::path &dir);
+FutureFiles settleFutureFiles(const std::vector<std::filesystem::path> &dirs);
 
 } // namespace dq8::launcher

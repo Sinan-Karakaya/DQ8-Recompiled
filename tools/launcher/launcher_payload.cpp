@@ -227,31 +227,36 @@ Unpacked unpackPayload(const Payload &payload, const std::filesystem::path &repo
     return Unpacked::Copied;
 }
 
-FutureFiles settleFutureFiles(const std::filesystem::path &dir) {
+FutureFiles settleFutureFiles(const std::vector<std::filesystem::path> &dirs) {
     FutureFiles moved;
     const auto now = std::filesystem::file_time_type::clock::now();
     // FAT rounds a file written just now up to 2 s ahead.
     const auto limit = now + std::chrono::minutes(1);
-    std::error_code ec;
-    for (auto it = std::filesystem::recursive_directory_iterator(
-             dir, std::filesystem::directory_options::skip_permission_denied, ec);
-         !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
-        std::error_code entryError;
-        if (it->is_symlink(entryError))
-            continue;
-        if (it->is_directory(entryError)) {
-            if (it->path().filename() == ".git")
+    for (const std::filesystem::path &dir : dirs) {
+        std::error_code ec;
+        for (auto it = std::filesystem::recursive_directory_iterator(
+                 dir, std::filesystem::directory_options::skip_permission_denied, ec);
+             !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+            // A checkout's .git is a folder; a submodule's or a linked worktree's, a file.
+            if (it->path().filename() == ".git") {
                 it.disable_recursion_pending();
-            continue;
+                continue;
+            }
+            std::error_code entryError;
+            if (it->is_symlink(entryError) || it->is_directory(entryError))
+                continue;
+            const auto time = it->last_write_time(entryError);
+            if (entryError || time <= limit)
+                continue;
+            std::filesystem::last_write_time(it->path(), now, entryError);
+            if (entryError) {
+                if (moved.failed++ == 0u)
+                    moved.firstFailed = it->path();
+                continue;
+            }
+            ++moved.count;
+            moved.ahead = std::max(moved.ahead, std::chrono::duration_cast<std::chrono::seconds>(time - now));
         }
-        const auto time = it->last_write_time(entryError);
-        if (entryError || time <= limit)
-            continue;
-        std::filesystem::last_write_time(it->path(), now, entryError);
-        if (entryError)
-            continue;
-        ++moved.count;
-        moved.ahead = std::max(moved.ahead, std::chrono::duration_cast<std::chrono::seconds>(time - now));
     }
     return moved;
 }
