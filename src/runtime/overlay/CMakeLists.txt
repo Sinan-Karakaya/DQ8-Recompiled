@@ -69,3 +69,5 @@ target_include_directories(dq8_overlay PRIVATE
 # The manager names ovl_<name>::functionRegion() for all six, so every overlay
 # archive is pulled in by that reference alone.
 target_link_libraries(dq8_overlay PUBLIC ${DQ8_OVERLAY_LIBS})
+# dq8 links them in its group with the runtime, which they call into.
+set(DQ8_OVERLAY_LIBS ${DQ8_OVERLAY_LIBS} PARENT_SCOPE)

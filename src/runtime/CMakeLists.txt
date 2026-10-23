@@ -82,14 +82,16 @@ if(DQ8_LINK_GENERATED)
         math(EXPR DQ8_GENERATED_PART_BEGIN "${DQ8_GENERATED_PART_BEGIN} + ${DQ8_GENERATED_PART_SIZE}")
     endwhile()
 
-    # Prefer lld for the large generated corpus.
+    # Prefer lld for the large generated corpus, except under GCC: lld cannot
+    # read the GCC LTO objects the runtime is archived as.
     find_program(DQ8_LLD_PROGRAM ld.lld)
-    if(DQ8_LLD_PROGRAM AND NOT APPLE)
+    if(DQ8_LLD_PROGRAM AND NOT APPLE AND NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
         message(STATUS "dq8: using lld (${DQ8_LLD_PROGRAM}) to link the generated corpus")
         target_link_options(dq8 PRIVATE -fuse-ld=lld)
     endif()
 
-    target_link_libraries(dq8 PRIVATE ${DQ8_GENERATED_TARGETS} ps2_runtime)
+    # Linked last, after everything that calls into the runtime.
+    set(DQ8_GAME_ARCHIVES ${DQ8_GENERATED_TARGETS} ps2_runtime)
     target_compile_definitions(dq8 PRIVATE DQ8_LINK_GENERATED=1)
     # On Windows the runtime's FFmpeg is DLLs; the launcher starts dq8.exe from
     # this build folder, so they go beside it. Elsewhere this does nothing.
@@ -108,9 +110,18 @@ if(DQ8_LINK_GENERATED)
 
     if(DQ8_LINK_OVERLAYS)
         add_subdirectory(overlay)
-        target_link_libraries(dq8 PRIVATE dq8_overlay)
+        list(APPEND DQ8_GAME_ARCHIVES dq8_overlay ${DQ8_OVERLAY_LIBS})
         # main.cpp guards its dq8::overlay::install(runtime) call on this.
         target_compile_definitions(dq8 PRIVATE DQ8_LINK_OVERLAYS=1)
+    endif()
+    # The corpus and the runtime call into each other, and GNU ld reads each
+    # archive once. ld64 and link.exe need no group, and CMake rejects RESCAN
+    # for them.
+    if(CMAKE_LINK_GROUP_USING_RESCAN_SUPPORTED)
+        list(JOIN DQ8_GAME_ARCHIVES "," DQ8_GAME_ARCHIVES)
+        target_link_libraries(dq8 PRIVATE "$<LINK_GROUP:RESCAN,${DQ8_GAME_ARCHIVES}>")
+    else()
+        target_link_libraries(dq8 PRIVATE ${DQ8_GAME_ARCHIVES})
     endif()
     # main.cpp includes ps2_recompiled_functions.h so it can name individual
     # recompiled functions -- --trace-printf redirects the stubbed debug-log
