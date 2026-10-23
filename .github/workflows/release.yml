@@ -111,6 +111,15 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           & "$tools\cmake\bin\cmake.exe" --build build/launcher
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # The Visual C++ runtime the launcher imports goes beside it: without
+          # the Redistributable a PC could not start the launcher, which is what
+          # installs the Build Tools, and they bring the runtime for the rest.
+          $imports = dumpbin /nologo /dependents build\launcher\dq8-launcher.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $runtime = $imports -match '^\s+(msvcp|vcruntime)\S*\.dll\s*$' | ForEach-Object { $_.Trim() }
+          if (-not $runtime) { throw "dq8-launcher.exe imports no Visual C++ runtime DLL; drop this step" }
+          $crt = Get-Item "$env:VCToolsRedistDir\x64\Microsoft.VC*.CRT" -ErrorAction Stop | Select-Object -First 1
+          foreach ($dll in $runtime) { Copy-Item (Join-Path $crt.FullName $dll) build\launcher -ErrorAction Stop }
           ctest --test-dir build/launcher --output-on-failure
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -131,7 +140,7 @@ jobs:
               ;;
             Windows)
               mkdir -p dist/DQ8Recomp
-              cp build/launcher/dq8-launcher.exe dist/DQ8Recomp/
+              cp build/launcher/dq8-launcher.exe build/launcher/*.dll dist/DQ8Recomp/
               cp -r build/payload dist/DQ8Recomp/payload
               (cd dist && 7z a -tzip -mx=7 "../upload/$ARCHIVE" DQ8Recomp > /dev/null)
               ;;
