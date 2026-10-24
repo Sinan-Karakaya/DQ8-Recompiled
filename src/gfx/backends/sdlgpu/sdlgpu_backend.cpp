@@ -823,7 +823,8 @@ struct SdlGpuBackend::Impl {
     void appendPrimitive(const GSPrimitiveBatch &batch,
                          float offsetX,
                          float offsetY,
-                         float depthScale) {
+                         float depthScale,
+                         bool texelRanges = false) {
         const GSDrawState &state = batch.state;
         auto convert = [&](const GSVertex &vertex) {
             return makeVertex(vertex, state, offsetX, offsetY, depthScale);
@@ -905,6 +906,24 @@ struct SdlGpuBackend::Impl {
             const float t0 = (v0.y <= v1.y) ? v0.t : v1.t;
             const float t1 = (v0.y <= v1.y) ? v1.t : v0.t;
 
+            if (texelRanges) {
+                // The texels at the first and last GS pixel the sprite covers,
+                // sampled where the fragment shader's native grid would.
+                auto range = [](float p0, float p1, float c0, float c1) {
+                    const double first = std::ceil(double(p0)), last = std::ceil(double(p1)) - 1.0;
+                    if (first > last)
+                        return kNoTexelRange;
+                    auto texel = [&](double p) {
+                        const double t = c0 + (double(c1) - c0) * (p - p0) / (double(p1) - p0);
+                        return std::clamp(std::floor(t + 1.0 / 256.0), 0.0, 65535.0);
+                    };
+                    const double a = texel(first), b = texel(last);
+                    return static_cast<uint32_t>(std::min(a, b)) |
+                           (static_cast<uint32_t>(std::max(a, b)) << 16u);
+                };
+                corner.texelRangeU = range(x0, x1, s0, s1);
+                corner.texelRangeV = range(y0, y1, t0, t1);
+            }
             GsGpuVertex a = corner, b = corner, c = corner, d = corner;
             a.x = x0; a.y = y0; a.s = s0; a.t = t0;
             b.x = x1; b.y = y0; b.s = s1; b.t = t0;
@@ -1245,6 +1264,7 @@ struct SdlGpuBackend::Impl {
         GsClampState clampState{};
         draw.texture = dummyTexture;
         float textureScale = 1.0f;
+        bool texelRanges = false;
         if (state.prim.tme) {
             ++stats.texturedPrimitives;
 
@@ -1360,13 +1380,18 @@ struct SdlGpuBackend::Impl {
                 // A sprite's UVs can span a texel more than its pixels (DQ8's
                 // font: 23 texels over 22 pixels), so the GS never reaches the
                 // last one. Sampling between native pixels would, and pull in
-                // the neighbouring glyph as thin lines and dots.
+                // the neighbouring glyph as thin lines and dots. Sprites from
+                // native textures sample at full resolution within the GS's
+                // texel range; other point draws stay on the native grid.
                 // Draws into a CT16 view are channel shuffles: bit-exact
                 // copies of reinterpreted pixels. Filtering between native
                 // pixels would blend neighbouring halfwords, so they sample
                 // on the native grid too, bilinear or not.
-                if (state.prim.fst && color->scale > 1u &&
-                    (!state.linearFilter || color->psm == GS_PSM_CT16 || color->psm == GS_PSM_CT16S))
+                const bool ct16Target = color->psm == GS_PSM_CT16 || color->psm == GS_PSM_CT16S;
+                texelRanges = state.prim.fst && color->scale > 1u && !state.linearFilter && !ct16Target &&
+                              state.prim.type == GS_PRIM_SPRITE && textureScale == 1.0f;
+                if (state.prim.fst && color->scale > 1u && !texelRanges &&
+                    (!state.linearFilter || ct16Target))
                     control |= kFragFlagNativeGrid |
                                (std::min<uint32_t>(color->scale, 15u) << kFragTargetScaleShift);
                 textureWidth = static_cast<float>(std::max<uint16_t>(state.textureWidth, 1u));
@@ -1413,7 +1438,7 @@ struct SdlGpuBackend::Impl {
             1.0f / static_cast<float>(depthMaximumForPsm(context.zbuf.psm));
 
         const uint32_t firstVertex = static_cast<uint32_t>(vertices.size());
-        appendPrimitive(batch, offsetX, offsetY, depthScale);
+        appendPrimitive(batch, offsetX, offsetY, depthScale, texelRanges);
         const uint32_t addedVertices = static_cast<uint32_t>(vertices.size()) - firstVertex;
         if (addedVertices == 0u)
             return;
