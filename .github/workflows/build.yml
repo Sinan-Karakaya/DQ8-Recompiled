@@ -284,6 +284,65 @@ jobs:
               summary.write('\n'.join(lines) + '\n')
           PY
 
+  # What the launcher runs on a player's Windows machine, short of the game's
+  # own code, which needs the disc: MSVC from a developer shell, Ninja, the
+  # recompiler built alone, then the runtime with the SDL3 GPU renderer.
+  runtime-windows:
+    name: Runtime / Windows x86-64 (MSVC)
+    if: github.event.repository.private == false
+    needs: checks
+    runs-on: windows-2025
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          submodules: true
+          persist-credentials: false
+
+      - name: Check out SDL
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: libsdl-org/SDL
+          ref: fa2c02bb6e21974a89ea9824bc53c9932abe5f9c # release-3.4.16
+          path: build/SDL
+          persist-credentials: false
+
+      - name: Build SDL
+        run: |
+          prefix=$(cygpath -m "$RUNNER_TEMP/sdl")
+          cmake -S build/SDL -B build/sdl -DCMAKE_INSTALL_PREFIX="$prefix" \
+            -DSDL_TESTS=OFF -DSDL_EXAMPLES=OFF
+          cmake --build build/sdl --config Release --parallel
+          cmake --install build/sdl --config Release
+          python -m pip install ninja
+          python thirdparty/PS2Recomp/ps2xTest/data/vu_programs.py "$RUNNER_TEMP/vu-programs"
+
+      # pwsh stops on nothing by itself, hence every exit code is checked.
+      - name: Build the recompiler and the runtime with MSVC
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          Import-Module "$vs\Common7\Tools\Microsoft.VisualStudio.DevShell.dll"
+          Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
+          $sdl = "$env:RUNNER_TEMP\sdl"
+          cmake -S thirdparty/PS2Recomp -B build/ps2recomp-standalone -G Ninja -DCMAKE_BUILD_TYPE=Release `
+            -DPS2X_BUILD_RUNTIME=OFF -DPS2X_BUILD_STUDIO=OFF -DPS2X_BUILD_TEST=OFF
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ninja -C build/ps2recomp-standalone ps2_recomp
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cmake -S . -B build/ci-runtime -G Ninja -DCMAKE_BUILD_TYPE=Release `
+            -DDQ8_BUILD_PS2RECOMP=ON -DDQ8_LINK_GENERATED=OFF `
+            "-DDQ8_GENERATED_DIR=$env:RUNNER_TEMP\no-game-corpus" -DDQ8_GFX_ENABLE_SDLGPU=ON `
+            "-DCMAKE_PREFIX_PATH=$sdl" -DPS2X_BUILD_RECOMP=OFF -DPS2X_BUILD_RUNTIME=ON `
+            -DPS2X_BUILD_ANALYZER=OFF -DPS2X_ENABLE_DEBUG_UI=OFF -DPS2X_ENABLE_FFMPEG=ON `
+            -DPS2X_ENABLE_SCCACHE=OFF "-DPS2X_VU_PROGRAM_PROFILES=$env:RUNNER_TEMP\vu-programs"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ninja -C build/ci-runtime -k 0 dq8
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
   launcher-windows:
     name: Launcher (Windows)
     runs-on: windows-2025
