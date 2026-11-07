@@ -18,7 +18,11 @@ option(DQ8_LINK_OVERLAYS
     OFF)
 
 if(DQ8_LINK_GENERATED)
-    target_sources(dq8 PRIVATE screen_size.cpp vu_bounds.cpp)
+    target_sources(dq8 PRIVATE screen_size.cpp vu_bounds.cpp host_sampler.cpp frame_rate.cpp)
+    if(WIN32)
+        # The in-process sampling profiler (DQ8_SAMPLER) names its addresses.
+        target_link_libraries(dq8 PRIVATE dbghelp)
+    endif()
     if(NOT TARGET ps2_runtime)
         message(FATAL_ERROR
             "DQ8_LINK_GENERATED=ON but the ps2_runtime target does not exist. "
