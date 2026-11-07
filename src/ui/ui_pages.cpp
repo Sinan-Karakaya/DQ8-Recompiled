@@ -357,6 +357,24 @@ void Overlay::drawInterfacePage() {
 
     sectionHeader("Frame rate");
     if (beginSettings("framerate")) {
+        if (canChangeFrameRate()) {
+            settingRow("Game frame rate",
+                       "Original is 30 in the field and 60 in menus. The game plays at the same speed at any "
+                       "rate; above 60 needs a game built from this version.",
+                       "Experimental");
+            static constexpr float kRates[] = {0.0f, 60.0f, 120.0f, 144.0f, Settings::kFrameRateDisplay,
+                                               Settings::kFrameRateUncapped};
+            static constexpr const char *kRateNames[] = {"Original", "60", "120", "144", "Display", "Uncapped"};
+            int rate = 0;
+            for (int index = 0; index < 6; ++index)
+                if (m_settings.frameRate == kRates[index])
+                    rate = index;
+            if (segmented("gameframerate", &rate, kRateNames, 6)) {
+                m_settings.frameRate = kRates[rate];
+                applyFrameRate();
+                markDirty();
+            }
+        }
         settingRow("Show the frame rate", "Frames the game draws each second. F3 toggles it.");
         if (toggle("fps", &m_settings.showFps))
             markDirty();

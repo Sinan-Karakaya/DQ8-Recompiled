@@ -189,4 +189,23 @@ if(DQ8_BUILD_PS2RECOMP)
 endif()
 
 add_subdirectory(src)
+
+# Debug information for the runtime, renderer and VU programs only: enough for
+# a profiler to name every function, without the translated corpus's 12k files
+# slowing the link down.
+option(DQ8_RUNTIME_DEBUG_INFO
+    "Compile the runtime and renderer with debug information (not the game corpus)"
+    OFF)
+if(DQ8_RUNTIME_DEBUG_INFO)
+    foreach(runtime_target IN ITEMS ps2_runtime dq8_gfx dq8_gfx_sdlgpu dq8_ui dq8)
+        if(TARGET ${runtime_target})
+            target_compile_options(${runtime_target} PRIVATE
+                $<$<CXX_COMPILER_ID:MSVC>:/Z7>
+                $<$<NOT:$<CXX_COMPILER_ID:MSVC>>:-g>)
+        endif()
+    endforeach()
+    if(MSVC AND TARGET dq8)
+        target_link_options(dq8 PRIVATE /DEBUG)
+    endif()
+endif()
 add_subdirectory(tools/runtime EXCLUDE_FROM_ALL)

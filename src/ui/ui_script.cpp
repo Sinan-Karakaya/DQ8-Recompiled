@@ -132,6 +132,12 @@ void Overlay::runStep(const ScriptStep &step, uint64_t frame) {
         setUserPaused(on);
     } else if (command == "fastforward") {
         setFastForward(on);
+    } else if (command == "framerate") {
+        if (first == "original") m_settings.frameRate = 0.0f;
+        else if (first == "display") m_settings.frameRate = Settings::kFrameRateDisplay;
+        else if (first == "uncapped") m_settings.frameRate = Settings::kFrameRateUncapped;
+        else m_settings.frameRate = static_cast<float>(std::atof(first.c_str()));
+        applyFrameRate();
     } else if (command == "speed") {
         m_settings.fastForwardSpeed = static_cast<float>(std::atof(first.c_str()));
         if (m_fastForward && m_host.setSpeed)
