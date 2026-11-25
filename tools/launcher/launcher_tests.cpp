@@ -338,6 +338,9 @@ void pathLimits() {
     require(pathOverflow(folders, at, folder + 13u).over == 0u, "a folder fits with 12 characters left for a file");
     const PathOverflow overFolder = pathOverflow(folders, at, folder + 12u);
     require(overFolder.over == 1u && overFolder.path == at / "deep", "and not with 11");
+    const PathOverflow overRoot = pathOverflow(root / "nothing here", at, at.native().size() + 12u);
+    require(overRoot.over == 1u && overRoot.path == at,
+            "a tree whose own folder is too long is caught, though it cannot be listed");
 
     const auto makePayload = [&](const std::filesystem::path &dir) {
         for (const char *part : {"source", "fetch/toml11-src/tests_of_everything", "deps/lib", "tools/python/bin",

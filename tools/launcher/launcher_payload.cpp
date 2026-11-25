@@ -187,18 +187,23 @@ std::vector<std::string> payloadCMakeArgs(const Payload &payload, const std::fil
 
 PathOverflow pathOverflow(const std::filesystem::path &dir, const std::filesystem::path &at, size_t limit) {
     PathOverflow worst;
-    std::error_code ec;
-    for (auto it = std::filesystem::recursive_directory_iterator(dir, ec);
-         !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
-        std::error_code entryError;
-        const bool folder = it->is_directory(entryError) && !it->is_symlink(entryError);
-        const std::filesystem::path path = at / it->path().lexically_relative(dir);
+    const auto measure = [&](const std::filesystem::path &path, bool folder) {
         // The limit counts the path's end, and a folder leaves room for a
         // file's 8.3 name.
         const size_t room = limit - (folder ? 13u : 1u);
         const size_t length = path.native().size();
         if (length > room && length - room > worst.over)
             worst = {path, length - room};
+    };
+    // The tree's own folder too: past the limit it cannot be listed, and the
+    // loop below would end on that error with nothing measured. A folder
+    // within the limit lists, so no entry is missed for its length.
+    measure(at, true);
+    std::error_code ec;
+    for (auto it = std::filesystem::recursive_directory_iterator(dir, ec);
+         !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+        std::error_code entryError;
+        measure(at / it->path().lexically_relative(dir), it->is_directory(entryError) && !it->is_symlink(entryError));
     }
     return worst;
 }
