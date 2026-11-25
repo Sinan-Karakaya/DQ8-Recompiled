@@ -19,14 +19,6 @@ if(NOT DEFINED CMAKE_CXX_COMPILER AND NOT DEFINED ENV{CXX})
     endif()
 endif()
 
-# Regeneration rewrites the corpus; ccache reuses unchanged function bodies.
-find_program(DQ8_CCACHE ccache)
-if(DQ8_CCACHE)
-    message(STATUS "DQ8Recomp: using ccache at ${DQ8_CCACHE}")
-    set(CMAKE_C_COMPILER_LAUNCHER "${DQ8_CCACHE}" CACHE STRING "C compiler launcher")
-    set(CMAKE_CXX_COMPILER_LAUNCHER "${DQ8_CCACHE}" CACHE STRING "C++ compiler launcher")
-endif()
-
 # Version: `git describe` when available, otherwise a dev placeholder.
 set(DQ8_VERSION "0.0.0-dev")
 find_package(Git QUIET)
@@ -47,6 +39,30 @@ project(DQ8Recomp
     VERSION 0.0.0
     DESCRIPTION "Dragon Quest 8 static recompilation"
     LANGUAGES C CXX)
+
+# Regeneration rewrites the corpus; ccache reuses unchanged function bodies.
+# Not in a player's build, where the launcher turns this off, nor with cl: one
+# found on PATH there left its precompiled header unreadable (C1852).
+option(DQ8_COMPILER_CACHE "Compile through ccache or sccache when one is installed" ON)
+if(DQ8_COMPILER_CACHE AND NOT MSVC)
+    find_program(DQ8_CCACHE ccache)
+    if(DQ8_CCACHE)
+        message(STATUS "DQ8Recomp: using ccache at ${DQ8_CCACHE}")
+        set(CMAKE_C_COMPILER_LAUNCHER "${DQ8_CCACHE}" CACHE STRING "C compiler launcher")
+        set(CMAKE_CXX_COMPILER_LAUNCHER "${DQ8_CCACHE}" CACHE STRING "C++ compiler launcher")
+    endif()
+elseif(DQ8_CCACHE)
+    # A build configured before still has it cached as the launcher.
+    foreach(DQ8_LANG C CXX)
+        if("$CACHE{CMAKE_${DQ8_LANG}_COMPILER_LAUNCHER}" STREQUAL "${DQ8_CCACHE}")
+            unset(CMAKE_${DQ8_LANG}_COMPILER_LAUNCHER CACHE)
+        endif()
+    endforeach()
+endif()
+if(NOT DQ8_COMPILER_CACHE)
+    # The runtime looks for sccache by itself.
+    set(PS2X_ENABLE_SCCACHE OFF)
+endif()
 
 # Apple's ar does not accept Ninja's @response files, which the 12k-file corpus
 # needs as one archive. Without llvm-ar it is split into archives small enough
