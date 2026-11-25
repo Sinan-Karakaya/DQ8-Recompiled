@@ -145,7 +145,7 @@ ToolCheck checkWindowHeaders() {
         missing += (missing.empty() ? "" : ", ") + header;
     check.found = missing.empty();
     check.version = missing.empty() ? "found" : "";
-    // As the problem, which Tools wraps: SteamOS can lack all twelve.
+    // As the problem, which Tools wraps: SteamOS can lack every one of them.
     if (!missing.empty())
         check.problem = "Missing " + missing;
     return check;
