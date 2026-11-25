@@ -178,11 +178,14 @@ const char *includedPurpose(const std::string &name) {
 
 std::vector<std::string> missingWindowHeaders(const std::filesystem::path &include) {
     // The game's window comes from raylib, whose GLFW builds against these:
-    // one or two from each package, as a distribution that ships its packages
-    // without their headers gets them back one package at a time.
+    // every header its X11 code includes, and one from each package those
+    // need in turn (libxrender, libxfixes), in the order of linuxInstall's
+    // packages. A distribution that ships its packages without their headers
+    // gets them back one package at a time.
     std::vector<std::string> missing;
     for (const char *header :
-         {"X11/X.h", "X11/extensions/XKB.h", "X11/Xlib.h", "X11/XKBlib.h", "X11/extensions/shape.h",
+         {"X11/X.h", "X11/Xmd.h", "X11/keysym.h", "X11/extensions/XKB.h", "X11/Xlib.h", "X11/Xatom.h",
+          "X11/Xresource.h", "X11/cursorfont.h", "X11/XKBlib.h", "X11/extensions/shape.h",
           "X11/extensions/Xrender.h", "X11/extensions/Xfixes.h", "X11/extensions/Xrandr.h",
           "X11/extensions/Xinerama.h", "X11/Xcursor/Xcursor.h", "X11/extensions/XInput2.h", "GL/gl.h"}) {
         std::error_code ec;

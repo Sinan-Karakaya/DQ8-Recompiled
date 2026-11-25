@@ -419,9 +419,14 @@ void linuxTools() {
         std::ofstream(include / header) << "// a header";
     }
     const std::vector<std::string> missing = missingWindowHeaders(include);
-    require(std::find(missing.begin(), missing.end(), "X11/extensions/XKB.h") != missing.end(),
-            "the keyboard extension's header is looked for");
-    require(missing.size() == 5u, "and so are the others raylib's window includes: " + std::to_string(missing.size()));
+    const auto lacks = [&](const char *header) {
+        return std::find(missing.begin(), missing.end(), header) != missing.end();
+    };
+    require(lacks("X11/extensions/XKB.h"), "the keyboard extension's header is looked for");
+    require(lacks("X11/XKBlib.h") && lacks("X11/extensions/shape.h") && lacks("X11/Xatom.h") &&
+                lacks("X11/extensions/Xfixes.h"),
+            "and so are the others raylib's window includes, or that those include");
+    require(!lacks("X11/Xlib.h") && !lacks("GL/gl.h"), "but not the ones that are there");
     for (const std::string &header : missing)
         std::ofstream(include / header) << "// a header";
     require(missingWindowHeaders(include).empty(), "with every one of them there, nothing is missing");
