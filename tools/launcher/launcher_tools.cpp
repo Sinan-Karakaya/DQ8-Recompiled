@@ -138,29 +138,24 @@ ToolCheck checkCompiler(const ChildEnvironment &environment) {
 }
 
 #if defined(__linux__)
-// The game's window comes from raylib, which builds against X11 and OpenGL.
 ToolCheck checkWindowHeaders() {
     ToolCheck check{"Window headers", "X11 and OpenGL, for the game's window"};
     std::string missing;
-    for (const char *header : {"X11/Xlib.h", "X11/extensions/Xrandr.h", "X11/extensions/Xinerama.h",
-                               "X11/Xcursor/Xcursor.h", "X11/extensions/XInput2.h", "GL/gl.h"}) {
-        std::error_code ec;
-        if (!std::filesystem::exists(std::filesystem::path("/usr/include") / header, ec))
-            missing += (missing.empty() ? "" : ", ") + std::string(header);
-    }
+    for (const std::string &header : missingWindowHeaders("/usr/include"))
+        missing += (missing.empty() ? "" : ", ") + header;
     check.found = missing.empty();
     check.version = missing.empty() ? "found" : "";
+    // As the problem, which Tools wraps: SteamOS can lack every one of them.
     if (!missing.empty())
-        check.purpose = "Missing " + missing;
+        check.problem = "Missing " + missing;
     return check;
 }
 
 // Runs a distribution's package command with its password prompt, when it has one.
-std::optional<InstallAction> packageAction(const std::string &command, const ChildEnvironment &environment) {
-    if (command.empty() || probeOutput({"pkexec", "--version"}, environment).empty())
+std::optional<InstallAction> packageAction(const LinuxInstall &install, const ChildEnvironment &environment) {
+    if (install.command.empty() || probeOutput({"pkexec", "--version"}, environment).empty())
         return std::nullopt;
-    return InstallAction{"Install for me", "Your system asks for your password, then installs them.",
-                         {"pkexec", "sh", "-c", command}};
+    return InstallAction{"Install for me", install.explanation, {"pkexec", "sh", "-c", install.command}};
 }
 #endif
 
@@ -180,6 +175,65 @@ const char *includedPurpose(const std::string &name) {
     return "";
 }
 } // namespace
+
+std::vector<std::string> missingWindowHeaders(const std::filesystem::path &include) {
+    // The game's window comes from raylib, whose GLFW builds against these:
+    // every header its X11 code includes, and one from each package those
+    // need in turn (libxrender, libxfixes), in the order of linuxInstall's
+    // packages. A distribution that ships its packages without their headers
+    // gets them back one package at a time.
+    std::vector<std::string> missing;
+    for (const char *header :
+         {"X11/X.h", "X11/Xmd.h", "X11/keysym.h", "X11/extensions/XKB.h", "X11/Xlib.h", "X11/Xatom.h",
+          "X11/Xresource.h", "X11/cursorfont.h", "X11/XKBlib.h", "X11/extensions/shape.h",
+          "X11/extensions/Xrender.h", "X11/extensions/Xfixes.h", "X11/extensions/Xrandr.h",
+          "X11/extensions/Xinerama.h", "X11/Xcursor/Xcursor.h", "X11/extensions/XInput2.h", "GL/gl.h"}) {
+        std::error_code ec;
+        if (!std::filesystem::exists(include / header, ec))
+            missing.emplace_back(header);
+    }
+    return missing;
+}
+
+LinuxInstall linuxInstall(const std::string &distribution, bool payload) {
+    const auto is = [&](const char *name) { return distribution.find(name) != std::string::npos; };
+    LinuxInstall install;
+    install.instructions = "Your distribution's packages provide them.";
+    install.explanation = "Your system asks for your password, then installs them.";
+    // The packages of missingWindowHeaders' headers, in its order.
+    const std::string arch = " xorgproto libx11 libxext libxrender libxfixes libxrandr libxinerama libxcursor libxi "
+                             "libglvnd";
+    if (is("steamos")) {
+        // An Arch whose packages are installed without their headers, on a
+        // read-only system: --needed would skip every one of them.
+        install.command = "steamos-devmode enable --no-prompt && pacman -S --noconfirm gcc glibc linux-api-headers" +
+                          arch + (payload ? "" : " cmake ninja python pkgconf sdl3 ffmpeg alsa-lib");
+        install.instructions = "SteamOS comes without a compiler or its libraries' headers, and keeps its system "
+                               "files read-only. Its developer mode unlocks them. A SteamOS update undoes all of "
+                               "this, and they need installing again.";
+        install.explanation = "SteamOS asks for your password (set one with passwd in Konsole if you never did), "
+                              "turns on its developer mode, then installs them.";
+    } else if (is("debian") || is("ubuntu")) {
+        install.command = std::string("apt-get update && apt-get install -y ") +
+                          (payload ? "g++" : "cmake ninja-build python3 g++ pkg-config libsdl3-dev libavcodec-dev "
+                                             "libavformat-dev libavutil-dev libswresample-dev libswscale-dev "
+                                             "libasound2-dev") +
+                          " x11proto-dev libx11-dev libxext-dev libxrender-dev libxfixes-dev libxrandr-dev "
+                          "libxinerama-dev libxcursor-dev libxi-dev libgl-dev";
+    } else if (is("fedora") || is("rhel")) {
+        install.command = std::string("dnf install -y ") +
+                          (payload ? "gcc-c++" : "cmake ninja-build python3 gcc-c++ pkgconf SDL3-devel "
+                                                 "ffmpeg-free-devel alsa-lib-devel") +
+                          " xorg-x11-proto-devel libX11-devel libXext-devel libXrender-devel libXfixes-devel "
+                          "libXrandr-devel libXinerama-devel libXcursor-devel libXi-devel mesa-libGL-devel";
+    } else if (is("arch")) {
+        install.command = std::string("pacman -S --needed --noconfirm ") +
+                          (payload ? "gcc" : "cmake ninja python gcc pkgconf sdl3 ffmpeg alsa-lib") + " mesa" + arch;
+    } else {
+        install.instructions = "Install the tools above with your distribution's package manager, then check again.";
+    }
+    return install;
+}
 
 ToolCheck includedTool(const std::string &name, const std::string &version) {
     ToolCheck tool{name, includedPurpose(name)};
@@ -274,31 +328,10 @@ ToolReport checkTools(const ChildEnvironment &environment, const Payload *payloa
              "--accept-package-agreements", "--accept-source-agreements", "--override",
              "--passive --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"}};
 #else
-    const std::string distro = distribution();
-    std::string command;
-    if (distro.find("debian") != std::string::npos || distro.find("ubuntu") != std::string::npos) {
-        command = payload ? "apt-get update && apt-get install -y g++ libx11-dev libxrandr-dev libxinerama-dev "
-                            "libxcursor-dev libxi-dev libgl-dev"
-                          : "apt-get update && apt-get install -y cmake ninja-build python3 g++ pkg-config "
-                            "libsdl3-dev libavcodec-dev libavformat-dev libavutil-dev libswresample-dev "
-                            "libswscale-dev libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev "
-                            "libgl-dev libasound2-dev";
-    } else if (distro.find("fedora") != std::string::npos || distro.find("rhel") != std::string::npos) {
-        command = payload ? "dnf install -y gcc-c++ libX11-devel libXrandr-devel libXinerama-devel "
-                            "libXcursor-devel libXi-devel mesa-libGL-devel"
-                          : "dnf install -y cmake ninja-build python3 gcc-c++ pkgconf SDL3-devel ffmpeg-free-devel "
-                            "libX11-devel libXrandr-devel libXinerama-devel libXcursor-devel libXi-devel "
-                            "mesa-libGL-devel alsa-lib-devel";
-    } else if (distro.find("arch") != std::string::npos) {
-        command = payload ? "pacman -S --needed --noconfirm gcc libx11 libxrandr libxinerama libxcursor libxi mesa"
-                          : "pacman -S --needed --noconfirm cmake ninja python gcc pkgconf sdl3 ffmpeg libx11 "
-                            "libxrandr libxinerama libxcursor libxi mesa alsa-lib";
-    }
-    report.installCommand = command.empty() ? std::string() : "sudo sh -c '" + command + "'";
-    report.instructions = command.empty() ? "Install the tools above with your distribution's package manager, "
-                                            "then check again."
-                                          : "Your distribution's packages provide them.";
-    report.install = packageAction(command, environment);
+    const LinuxInstall install = linuxInstall(distribution(), payload != nullptr);
+    report.installCommand = install.command.empty() ? std::string() : "sudo sh -c '" + install.command + "'";
+    report.instructions = install.instructions;
+    report.install = packageAction(install, environment);
 #endif
     return report;
 }

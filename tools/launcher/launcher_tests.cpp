@@ -498,6 +498,56 @@ void configuredCompiler() {
     std::filesystem::remove_all(root, ec);
 }
 
+// Linux: Tools looks for every header the game's window builds against, and
+// names the packages that bring them. A Steam Deck with only the headers Tools
+// used to look for passed it, then stopped in CMake on "XKB headers not found".
+void linuxTools() {
+    const std::filesystem::path include = std::filesystem::temp_directory_path() / "dq8-launcher-include";
+    std::error_code ec;
+    std::filesystem::remove_all(include, ec);
+    for (const char *header : {"X11/X.h", "X11/Xlib.h", "X11/extensions/Xrandr.h", "X11/extensions/Xinerama.h",
+                               "X11/Xcursor/Xcursor.h", "X11/extensions/XInput2.h", "GL/gl.h"}) {
+        std::filesystem::create_directories((include / header).parent_path(), ec);
+        std::ofstream(include / header) << "// a header";
+    }
+    const std::vector<std::string> missing = missingWindowHeaders(include);
+    const auto lacks = [&](const char *header) {
+        return std::find(missing.begin(), missing.end(), header) != missing.end();
+    };
+    require(lacks("X11/extensions/XKB.h"), "the keyboard extension's header is looked for");
+    require(lacks("X11/XKBlib.h") && lacks("X11/extensions/shape.h") && lacks("X11/Xatom.h") &&
+                lacks("X11/extensions/Xfixes.h"),
+            "and so are the others raylib's window includes, or that those include");
+    require(!lacks("X11/Xlib.h") && !lacks("GL/gl.h"), "but not the ones that are there");
+    for (const std::string &header : missing)
+        std::ofstream(include / header) << "// a header";
+    require(missingWindowHeaders(include).empty(), "with every one of them there, nothing is missing");
+    std::filesystem::remove_all(include, ec);
+
+    // By /etc/os-release's "ID ID_LIKE".
+    const auto has = [](const std::string &text, const char *part) { return text.find(part) != std::string::npos; };
+    const LinuxInstall deck = linuxInstall("steamos arch", true);
+    require(has(deck.command, "steamos-devmode enable") && !has(deck.command, "--needed"),
+            "SteamOS unlocks its system first, and reinstalls packages it has without their headers");
+    require(has(deck.command, " glibc") && has(deck.command, " linux-api-headers") && has(deck.command, " xorgproto"),
+            "the C library's and the X protocol's among them: " + deck.command);
+    require(has(deck.instructions, "SteamOS update") && has(deck.explanation, "passwd"),
+            "and says what a SteamOS update does to them");
+    const LinuxInstall arch = linuxInstall("cachyos arch", true);
+    require(has(arch.command, "pacman -S --needed") && has(arch.command, " xorgproto") && has(arch.command, " libxext") &&
+                !has(arch.command, "steamos"),
+            "another Arch installs what it lacks: " + arch.command);
+    require(has(linuxInstall("ubuntu debian", true).command, " x11proto-dev") &&
+                has(linuxInstall("fedora ", true).command, " xorg-x11-proto-devel"),
+            "Debian's and Fedora's names for the same headers");
+    require(!has(linuxInstall("ubuntu debian", true).command, "cmake") &&
+                has(linuxInstall("ubuntu debian", false).command, "cmake"),
+            "a release brings its own tools; a checkout asks for them too");
+    const LinuxInstall unknown = linuxInstall("void ", true);
+    require(unknown.command.empty() && has(unknown.instructions, "package manager"),
+            "a distribution it does not know gets no command, only what to do");
+}
+
 void childProcess() {
 #if !defined(_WIN32)
     std::vector<std::string> lines;
@@ -673,6 +723,7 @@ int main() try {
     futureFiles();
     builtMarker();
     configuredCompiler();
+    linuxTools();
     childProcess();
     childProcessToFile();
     childEnvironment();

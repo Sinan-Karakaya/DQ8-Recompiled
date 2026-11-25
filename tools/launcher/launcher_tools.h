@@ -54,6 +54,18 @@ InstallAction commandLineToolsInstall();
 // it cannot carry is looked for: the compiler, and on Linux the window headers.
 ToolReport checkTools(const ChildEnvironment &environment, const Payload *payload = nullptr);
 
+// Linux: the headers the game's window builds against that `include`,
+// /usr/include on a player's system, does not have.
+std::vector<std::string> missingWindowHeaders(const std::filesystem::path &include);
+// Linux: what installs the compiler and those headers, by /etc/os-release's ID
+// and ID_LIKE; with no payload, the other tools as well.
+struct LinuxInstall {
+    std::string command;      // run as root; empty for a distribution not known
+    std::string instructions; // shown above it
+    std::string explanation;  // what "Install for me" does
+};
+LinuxInstall linuxInstall(const std::string &distribution, bool payload);
+
 // "cmake version 3.31.6" -> {3, 31, 6}; missing parts are 0.
 std::vector<int> parseVersion(const std::string &text);
 bool versionAtLeast(const std::vector<int> &version, std::initializer_list<int> minimum);
