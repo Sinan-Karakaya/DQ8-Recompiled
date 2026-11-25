@@ -43,10 +43,29 @@ ChildEnvironment payloadEnvironment(const Payload &payload, const std::filesyste
 // fetched source in place of its git clone.
 std::vector<std::string> payloadCMakeArgs(const Payload &payload, const std::filesystem::path &repo);
 
+// Windows opens no path of 260 characters or more, and makes no folder of 248
+// or more; 0 where paths have no such limit.
+#if defined(_WIN32)
+inline constexpr size_t kPathLimit = 260u;
+#else
+inline constexpr size_t kPathLimit = 0u;
+#endif
+
+// The path furthest past `limit` once dir's tree sits under `at`, and by how
+// many characters; `over` is 0 when all of them fit.
+struct PathOverflow {
+    std::filesystem::path path;
+    size_t over = 0u;
+};
+PathOverflow pathOverflow(const std::filesystem::path &dir, const std::filesystem::path &at, size_t limit);
+// Whether the payload's own files and their copies under repo all fit `limit`;
+// error names the folder to shorten when they do not.
+bool payloadFits(const Payload &payload, const std::filesystem::path &repo, size_t limit, std::string &error);
+
 // Copies the source tree, fetched sources and libraries into repo unless this
 // version is there already, keeping repo/build. The copies are dated when they
-// were made. Refuses a folder it did not make, such as a git checkout.
-// progress(done, total) in bytes; false cancels.
+// were made. Refuses a folder it did not make, such as a git checkout, and one
+// too long for Windows' paths. progress(done, total) in bytes; false cancels.
 enum class Unpacked : uint8_t { Copied, AlreadyThere, Failed };
 Unpacked unpackPayload(const Payload &payload, const std::filesystem::path &repo,
                        const std::function<bool(uint64_t, uint64_t)> &progress, std::string &error);
