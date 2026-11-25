@@ -315,6 +315,98 @@ void payloadUnpacking() {
     std::filesystem::remove_all(root, ec);
 }
 
+// Windows opens no path of 260 characters or more. A release that sits in, or
+// unpacks into, a folder too long for its files says which folder to shorten,
+// where the copy used to stop halfway with "cannot find the path specified".
+void pathLimits() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "dq8-launcher-limit";
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+
+    // A file may end right at the limit; a folder needs room left for a file.
+    const std::filesystem::path files = root / "files", folders = root / "folders", at = root / "at";
+    std::filesystem::create_directories(files / "tests", ec);
+    std::filesystem::create_directories(folders / "deep", ec);
+    std::ofstream(files / "tests" / "a_long_name.txt") << "x";
+    std::ofstream(folders / "deep" / "a") << "x";
+    const size_t file = (at / "tests" / "a_long_name.txt").native().size();
+    require(pathOverflow(files, at, file + 1u).over == 0u, "a file whose path ends at the limit fits");
+    const PathOverflow overFile = pathOverflow(files, at, file);
+    require(overFile.over == 1u && overFile.path == at / "tests" / "a_long_name.txt",
+            "one character more does not, and it is the path named");
+    const size_t folder = (at / "deep").native().size();
+    require(pathOverflow(folders, at, folder + 13u).over == 0u, "a folder fits with 12 characters left for a file");
+    const PathOverflow overFolder = pathOverflow(folders, at, folder + 12u);
+    require(overFolder.over == 1u && overFolder.path == at / "deep", "and not with 11");
+    const PathOverflow overRoot = pathOverflow(root / "nothing here", at, at.native().size() + 12u);
+    require(overRoot.over == 1u && overRoot.path == at,
+            "a tree whose own folder is too long is caught, though it cannot be listed");
+
+    const auto makePayload = [&](const std::filesystem::path &dir) {
+        for (const char *part : {"source", "fetch/toml11-src/tests_of_everything", "deps/lib", "tools/python/bin",
+                                 "tools/cmake/bin"})
+            std::filesystem::create_directories(dir / part, ec);
+        std::ofstream(dir / "source" / "setup.py") << "# setup";
+        std::ofstream(dir / "fetch" / "toml11-src" / "tests_of_everything" / "same_tests_multiple_configurations.txt")
+            << "x";
+        std::ofstream(dir / "tools" / "python" / "bin" / "python3") << "python";
+        std::ofstream(dir / "payload.json")
+            << R"({"version": "v1", "platform": "test", "paths": {"source": "source", "fetch": "fetch",
+               "deps": "deps", "python": "tools/python/bin/python3", "cmake": "tools/cmake/bin",
+               "ninja": "tools/ninja/bin", "pkgconf": "tools/pkgconf/bin/pkgconf", "recompiler": ""},
+               "versions": {}, "fetched": ["toml11-src"]})";
+        std::string loadError;
+        const std::optional<Payload> payload = loadPayload(dir, loadError);
+        require(payload.has_value(), "the payload loads: " + loadError);
+        return *payload;
+    };
+    const std::filesystem::path longest =
+        std::filesystem::path("build") / "fetch" / "toml11-src" / "tests_of_everything" /
+        "same_tests_multiple_configurations.txt";
+
+    // The game's folder is the one too long: its copies are the longer paths.
+    const Payload payload = makePayload(root / "release" / "payload");
+    const std::filesystem::path games = root / "a folder for the games", repo = unpackedSource(games);
+    const size_t copy = (repo / longest).native().size();
+    std::string error;
+    require(payloadFits(payload, repo, copy + 1u, error) && error.empty(), "a release whose longest copy just fits");
+    require(!payloadFits(payload, repo, copy, error), "one whose longest copy is a character too long does not");
+    require(error.find("need 1 more") != std::string::npos && error.find(pathUtf8(games)) != std::string::npos &&
+                error.find("Options") != std::string::npos,
+            "and the game files folder is the one to change: " + error);
+
+    // The launcher's own folder is: no folder for the game would help.
+    const std::filesystem::path far = root / "a release unzipped a long way down" / "DQ8Recomp";
+    const Payload deepPayload = makePayload(far / "payload");
+    const size_t own = (far / "payload" / "fetch" / "toml11-src" / "tests_of_everything" /
+                        "same_tests_multiple_configurations.txt")
+                           .native()
+                           .size();
+    const std::filesystem::path nearRepo = unpackedSource(root / "g");
+    require((nearRepo / longest).native().size() < own, "this test's copies are the shorter paths");
+    error.clear();
+    require(!payloadFits(deepPayload, nearRepo, own, error) && error.find(pathUtf8(far)) != std::string::npos &&
+                error.find("Move") != std::string::npos && error.find("Options") == std::string::npos,
+            "the launcher's folder is the one to move: " + error);
+
+    // The unpack itself: refused whole on Windows, before a file is copied.
+    std::filesystem::path deep = root;
+    while (deep.native().size() < 200u)
+        deep /= std::string(std::min<size_t>(40u, 200u - deep.native().size()), 'd');
+    std::filesystem::create_directories(deep, ec);
+    error.clear();
+    const Unpacked unpacked = unpackPayload(payload, unpackedSource(deep), {}, error);
+    if (kPathLimit != 0u) {
+        require(unpacked == Unpacked::Failed && error.find("Options") != std::string::npos,
+                "a folder too long for Windows is refused: " + error);
+        require(!std::filesystem::exists(unpackedSource(deep), ec), "with nothing copied into it");
+    } else {
+        require(unpacked == Unpacked::Copied && std::filesystem::exists(unpackedSource(deep) / longest, ec),
+                "where paths have no such limit, the same folder unpacks: " + error);
+    }
+    std::filesystem::remove_all(root, ec);
+}
+
 // A file dated after now, among CMake's inputs, had ninja regenerate
 // build.ninja until it gave up; such files get now's time, other files and
 // .git keep theirs.
@@ -404,6 +496,56 @@ void configuredCompiler() {
     cache(root / "MSVC" / "14.38" / "cl.exe", root / "MSVC" / "14.38" / "cl.exe");
     require(!configuredWith(build, "cl"), "and so is a cl an update removed");
     std::filesystem::remove_all(root, ec);
+}
+
+// Linux: Tools looks for every header the game's window builds against, and
+// names the packages that bring them. A Steam Deck with only the headers Tools
+// used to look for passed it, then stopped in CMake on "XKB headers not found".
+void linuxTools() {
+    const std::filesystem::path include = std::filesystem::temp_directory_path() / "dq8-launcher-include";
+    std::error_code ec;
+    std::filesystem::remove_all(include, ec);
+    for (const char *header : {"X11/X.h", "X11/Xlib.h", "X11/extensions/Xrandr.h", "X11/extensions/Xinerama.h",
+                               "X11/Xcursor/Xcursor.h", "X11/extensions/XInput2.h", "GL/gl.h"}) {
+        std::filesystem::create_directories((include / header).parent_path(), ec);
+        std::ofstream(include / header) << "// a header";
+    }
+    const std::vector<std::string> missing = missingWindowHeaders(include);
+    const auto lacks = [&](const char *header) {
+        return std::find(missing.begin(), missing.end(), header) != missing.end();
+    };
+    require(lacks("X11/extensions/XKB.h"), "the keyboard extension's header is looked for");
+    require(lacks("X11/XKBlib.h") && lacks("X11/extensions/shape.h") && lacks("X11/Xatom.h") &&
+                lacks("X11/extensions/Xfixes.h"),
+            "and so are the others raylib's window includes, or that those include");
+    require(!lacks("X11/Xlib.h") && !lacks("GL/gl.h"), "but not the ones that are there");
+    for (const std::string &header : missing)
+        std::ofstream(include / header) << "// a header";
+    require(missingWindowHeaders(include).empty(), "with every one of them there, nothing is missing");
+    std::filesystem::remove_all(include, ec);
+
+    // By /etc/os-release's "ID ID_LIKE".
+    const auto has = [](const std::string &text, const char *part) { return text.find(part) != std::string::npos; };
+    const LinuxInstall deck = linuxInstall("steamos arch", true);
+    require(has(deck.command, "steamos-devmode enable") && !has(deck.command, "--needed"),
+            "SteamOS unlocks its system first, and reinstalls packages it has without their headers");
+    require(has(deck.command, " glibc") && has(deck.command, " linux-api-headers") && has(deck.command, " xorgproto"),
+            "the C library's and the X protocol's among them: " + deck.command);
+    require(has(deck.instructions, "SteamOS update") && has(deck.explanation, "passwd"),
+            "and says what a SteamOS update does to them");
+    const LinuxInstall arch = linuxInstall("cachyos arch", true);
+    require(has(arch.command, "pacman -S --needed") && has(arch.command, " xorgproto") && has(arch.command, " libxext") &&
+                !has(arch.command, "steamos"),
+            "another Arch installs what it lacks: " + arch.command);
+    require(has(linuxInstall("ubuntu debian", true).command, " x11proto-dev") &&
+                has(linuxInstall("fedora ", true).command, " xorg-x11-proto-devel"),
+            "Debian's and Fedora's names for the same headers");
+    require(!has(linuxInstall("ubuntu debian", true).command, "cmake") &&
+                has(linuxInstall("ubuntu debian", false).command, "cmake"),
+            "a release brings its own tools; a checkout asks for them too");
+    const LinuxInstall unknown = linuxInstall("void ", true);
+    require(unknown.command.empty() && has(unknown.instructions, "package manager"),
+            "a distribution it does not know gets no command, only what to do");
 }
 
 void childProcess() {
@@ -577,9 +719,11 @@ int main() try {
     progressAndVersions();
     compileCosts();
     payloadUnpacking();
+    pathLimits();
     futureFiles();
     builtMarker();
     configuredCompiler();
+    linuxTools();
     childProcess();
     childProcessToFile();
     childEnvironment();

@@ -81,7 +81,9 @@ jobs:
             aot-shards: 8
             aot-jobs: 2
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    # Linux x86-64 takes 36 to 38 minutes on a usual runner and 47 on a slow
+    # one, which 45 cut off in the middle of the tests.
+    timeout-minutes: 60
     defaults:
       run:
         shell: bash

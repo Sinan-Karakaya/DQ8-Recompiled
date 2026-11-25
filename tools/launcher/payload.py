@@ -130,7 +130,22 @@ PRUNE = [
     "tools/python/lib/python3.12/turtledemo", "tools/python/Lib/site-packages/pip",
     "tools/python/Lib/idlelib", "tools/python/Lib/ensurepip", "tools/python/Lib/tkinter",
     "tools/python/tcl", "fetch/raylib-src/examples", "fetch/raylib-src/projects",
+    # The fetched sources' own tests, manuals and examples: 86 MB of fetch/'s
+    # 125 on Windows, and its longest paths, 196 characters under toml11's
+    # tests, which left a player's folder 62 of the 260 Windows gives a path.
+    # libdwarf's doc/ stays: its CMakeLists.txt adds it whatever the options.
+    "fetch/elfio-src/tests", "fetch/elfio-src/doc", "fetch/elfio-src/examples",
+    "fetch/fmt-src/test", "fetch/fmt-src/doc",
+    "fetch/glslang-src/Test", "fetch/glslang-src/gtests",
+    "fetch/libdwarf-src/test", "fetch/libdwarf-src/bugxml", "fetch/libdwarf-src/fuzz",
+    "fetch/nlohmann_json-src/tests", "fetch/nlohmann_json-src/docs",
+    "fetch/rabbitizer-src/tests", "fetch/rabbitizer-src/docs",
+    "fetch/toml11-src/tests", "fetch/toml11-src/docs", "fetch/toml11-src/examples",
 ]
+# The longest path a release may unpack under the player's folder, so that
+# folder keeps 98 characters on Windows. A new dependency that goes past it
+# stops the payload rather than a player's build.
+UNPACKED_PATH_BUDGET = 160
 
 
 def prune(out: Path, target: str) -> None:
@@ -365,24 +380,55 @@ def build_recompiler(recomp: Path, tools_dir: Path, tools: dict, env: dict, targ
     return dest
 
 
-def harvest_fetch(source: Path, work: Path, fetch_dir: Path, tools: dict, deps: Path, env: dict,
-                  target: str) -> list:
-    """Configures the recompiler and the game once, as the launcher will, and
-    keeps the sources FetchContent cloned."""
-    recomp = work / "recomp"
+def configure(source: Path, recomp: Path, game: Path, work: Path, tools: dict, deps: Path, env: dict,
+              target: str, extra: list) -> None:
+    """Configures the recompiler and the game once, as the launcher will."""
     run([tools["cmake"], "-S", source / "thirdparty" / "PS2Recomp", "-B", recomp, "-G", "Ninja"]
-        + recompiler_args(source, target), env=env)
+        + recompiler_args(source, target) + extra, env=env)
     # The game configures against a stand-in corpus: what it fetches does not
     # depend on the translated code. Overlays fetch nothing more.
     stub = work / "stub-generated"
     stub.mkdir(parents=True, exist_ok=True)
     (stub / "stub.cpp").write_text("// stand-in for the translated game\n")
-    game = work / "game"
     run([tools["cmake"], "-S", source, "-B", game, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
          "-DDQ8_LINK_GENERATED=ON", "-DDQ8_LINK_OVERLAYS=OFF", "-DDQ8_GFX_ENABLE_SDLGPU=ON",
          f"-DDQ8_GENERATED_DIR={stub}", f"-DCMAKE_PREFIX_PATH={deps}",
          f"-DPKG_CONFIG_EXECUTABLE={tools['pkgconf']}", "-DPKG_CONFIG_ARGN=--define-prefix",
-         f"-DPython3_EXECUTABLE={tools['python']}"], env=env)
+         f"-DPython3_EXECUTABLE={tools['python']}"] + extra, env=env)
+
+
+def check_pruned(out: Path, work: Path, fetched: list, tools: dict, env: dict, target: str) -> None:
+    """Configures both again from what the release ships, as a player's build
+    does, and measures the paths it will unpack: the pruning runs after the
+    first configure, which never saw its result."""
+    # As the launcher names them: "spirv_cross-src" stands in for SPIRV_CROSS.
+    sources = [f"-DFETCHCONTENT_SOURCE_DIR_{name[:-4].upper()}={(out / 'fetch' / name).as_posix()}"
+               for name in fetched]
+    try:
+        configure(out / "source", work / "recomp-pruned", work / "game-pruned", work, tools, out / "deps", env,
+                  target, sources)
+    except subprocess.CalledProcessError:
+        sys.exit("payload: the build does not configure from the pruned sources in fetch/; "
+                 "PRUNE takes something it reads.")
+    # Where the launcher puts each tree under the player's folder. Windows
+    # gives a folder 12 characters fewer than a file.
+    unpacked = {"source": "DQ8Recomp-source", "fetch": "DQ8Recomp-source/build/fetch",
+                "deps": "DQ8Recomp-source/build/deps"}
+    length, longest = max((len(name) + (12 if path.is_dir() else 0), name)
+                          for tree, under in unpacked.items() for path in (out / tree).rglob("*")
+                          for name in [f"{under}/{path.relative_to(out / tree).as_posix()}"])
+    print(f"payload: the longest unpacked path takes {length} characters: {longest}", flush=True)
+    if target.startswith("windows") and length > UNPACKED_PATH_BUDGET:
+        sys.exit(f"payload: that is over the {UNPACKED_PATH_BUDGET} a release may take of Windows' 260; "
+                 "prune it, or raise UNPACKED_PATH_BUDGET and say so in the release notes.")
+
+
+def harvest_fetch(source: Path, work: Path, fetch_dir: Path, tools: dict, deps: Path, env: dict,
+                  target: str) -> list:
+    """Configures the recompiler and the game, and keeps the sources
+    FetchContent cloned."""
+    recomp, game = work / "recomp", work / "game"
+    configure(source, recomp, game, work, tools, deps, env, target, [])
     # This is the configure a player's build gets. Without FFmpeg the game still
     # builds and runs, and shows garbage for every movie, as Windows releases did.
     if not decodes_movies(game / "CMakeCache.txt"):
@@ -483,6 +529,7 @@ def main() -> None:
     # What the translation's scripts import, after the pruning: a release once
     # went out without threading.
     run([python, "-I", "-c", "import hashlib, json, subprocess, threading"])
+    check_pruned(out, work, fetched, tools, env, target)
 
     manifest = {
         "version": version,
