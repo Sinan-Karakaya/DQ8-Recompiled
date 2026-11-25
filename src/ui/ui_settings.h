@@ -42,6 +42,12 @@ struct Settings {
 
     // Game
     float fastForwardSpeed = 2.0f; // 0 runs unpaced
+    // Frames per second the game is paced to: 0 keeps its own cadence (30 in
+    // the field, 60 in menus), kFrameRateDisplay follows the display's refresh
+    // rate, kFrameRateUncapped never waits.
+    float frameRate = 0.0f;
+    static constexpr float kFrameRateDisplay = -2.0f;
+    static constexpr float kFrameRateUncapped = -1.0f;
 };
 
 std::string serializeSettings(const Settings &settings);

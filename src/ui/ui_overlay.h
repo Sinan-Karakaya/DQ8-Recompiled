@@ -39,6 +39,9 @@ struct HostServices {
     std::function<void(bool)> setPaused;
     // The game's speed against real time; 0 runs it as fast as it can go.
     std::function<void(double)> setSpeed;
+    // Frames per second the game is paced to: 0 for its own cadence, negative
+    // for uncapped. Its speed does not change.
+    std::function<void(double)> setFrameRate;
     // Frames the game has finished drawing, for the counter; presents are
     // counted instead when it is empty.
     std::function<uint64_t()> completedRenders;
@@ -157,6 +160,8 @@ private:
     bool pausing() const;
     bool canPause() const { return static_cast<bool>(m_host.setPaused); }
     bool canChangeSpeed() const { return static_cast<bool>(m_host.setSpeed); }
+    bool canChangeFrameRate() const { return static_cast<bool>(m_host.setFrameRate); }
+    void applyFrameRate();
     std::string speedLabel(float speed) const;
     SDL_GamepadType displayedControllerType() const;
     double now() const;

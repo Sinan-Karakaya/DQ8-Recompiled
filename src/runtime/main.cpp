@@ -17,9 +17,12 @@
 #include "ps2_runtime.h"
 #include "ps2_recompiled_functions.h"
 #include "runtime/ee_scheduler.h"
+#include "runtime/ps2_vu1_options.h"
 #include "runtime/ps2_native_iop.h"
 #include "runtime/gs/gs_frontend.h"
 #include "runtime/gs/gs_threaded_backend.h"
+#include "frame_rate.h"
+#include "host_sampler.h"
 #include "screen_size.h"
 #include "vu_bounds.h"
 #include "../../tools/runtime/render_cadence.h"
@@ -79,6 +82,7 @@ namespace
             ps2_native_iop::setPaused(paused);
         };
         host.setSpeed = [&runtime](double speed) { runtime.eeScheduler().setHostSpeed(speed); };
+        host.setFrameRate = [](double hz) { dq8::setFrameRateTarget(hz); };
         host.completedRenders = [] {
             return dq8::diagnostics::RenderCadenceProbe::instance().publishedCompletedRoutines();
         };
@@ -354,6 +358,12 @@ int main(int argc, char **argv)
     // scheduler starts executing.
     runtime.cpu().pc = entryPoint;
 
+    // DQ8 does not rewrite a kicked GIF packet while VU1 is still sending it
+    // (PS2X_XGKICK_VERIFY=1 counted none through the title, the prologue and
+    // the opening scene), so the packet is copied once when the kick issues.
+    // DQ8_XGKICK_SYNC=1 restores the per-qword transfer.
+    ps2Vu1SetXgkickCopyAtIssue(!std::getenv("DQ8_XGKICK_SYNC"));
+
     if (!std::getenv("DQ8_DISABLE_VU_BOUNDS_FIX") && !dq8::installVuBoundsComparisons(runtime))
         std::fprintf(stderr, "[dq8] VU bounds comparison repair could not be installed\n");
 
@@ -397,13 +407,29 @@ int main(int argc, char **argv)
 #endif
     [[maybe_unused]] const bool renderCounterReady =
         dq8::diagnostics::configureRenderCadenceProbe(runtime, hasMenu);
+    // After the cadence probe, which wraps the render routine too.
+    if (!dq8::installFrameRateHooks(runtime))
+        std::fprintf(stderr, "[dq8] frame-rate hooks could not be installed; the game keeps its own cadence\n");
+    else
+    {
+        // DQ8_FRAME_RATE overrides the menu's setting for this run.
+        double displayHz = 0.0;
+#if defined(DQ8_HAS_SDLGPU)
+        if (sdlWindowBackend && sdlWindowBackend->hasWindow())
+            if (const SDL_DisplayMode *mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(sdlWindowBackend->window())))
+                displayHz = mode->refresh_rate;
+#endif
+        dq8::applyFrameRateEnvironment(displayHz);
+    }
 #if defined(DQ8_HAS_SDLGPU)
     if (renderCounterReady && sdlWindowBackend && sdlWindowBackend->hasWindow())
         sdlWindowBackend->setCompletedRenderCounter([] {
             return dq8::diagnostics::RenderCadenceProbe::instance().publishedCompletedRoutines();
         });
 #endif
+    dq8::diagnostics::startHostSampler();
     runtime.run();
+    dq8::diagnostics::stopHostSampler();
 
 #if defined(DQ8_HAS_SDLGPU)
     if (sdlWindowBackend)

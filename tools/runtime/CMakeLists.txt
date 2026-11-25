@@ -111,3 +111,19 @@ if(TARGET ps2_runtime)
     add_test(NAME sound COMMAND dq8-sound-tests)
     set_tests_properties(sound PROPERTIES TIMEOUT 60)
 endif()
+
+# A test can keep two whole runtimes on its stack; MSVC's default 1 MiB is not
+# enough for that where Linux and macOS give 8 MiB.
+if(MSVC)
+    foreach(test_target IN ITEMS dq8-render-cadence-tests dq8-kernel-tests dq8-ee-pacing-tests
+            dq8-vu-tests dq8-vu-math-tests dq8-memory-tests dq8-vu-bounds-tests dq8-sound-tests dq8-vu-replay)
+        if(TARGET ${test_target})
+            target_link_options(${test_target} PRIVATE /STACK:16777216)
+        endif()
+    endforeach()
+    foreach(variant IN LISTS FIBER_VARIANTS)
+        if(TARGET dq8-fiber-${variant})
+            target_link_options(dq8-fiber-${variant} PRIVATE /STACK:16777216)
+        endif()
+    endforeach()
+endif()

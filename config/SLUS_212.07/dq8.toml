@@ -271,6 +271,26 @@ stubs = [
 skip = [
 ]
 
+# Instruction patches, applied before translation (see src/runtime/frame_rate.h).
+#
+# The frame loop (FUN_00143550) clamps the frame delta to [interval,
+# 2*interval] fields with the integer interval converted on the spot, which
+# pins the game to 60 frames a second at most. Its lower bound now comes from a
+# float the runtime writes into the renderer's debug-percentage word at +0x3D04
+# before the clamp runs, and the upper bound is the field's own four fields.
+# One animation system steps a fixed 1.0 per frame; it now takes its step from
+# the word at +0x3D08, kept at 1.0 unless the game is paced to another rate.
+[patches]
+instructions = [
+    { address = 0x001439D4, value = 0xC6203D04 }, # lwc1 $f0, 0x3D04($s1)  was lwc1 $f0, 0x20($s0)
+    { address = 0x001439DC, value = 0x00000000 }, # nop                    was cvt.s.w $f0, $f0
+    { address = 0x001439EC, value = 0x3C014080 }, # lui $at, 0x4080 (4.0)  was lwc1 $f1, 0x20($s0)
+    { address = 0x001439FC, value = 0x44810800 }, # mtc1 $at, $f1          was cvt.s.w $f1, $f1
+    { address = 0x00143A00, value = 0x00000000 }, # nop                    was mul.s $f1, $f2, $f1
+    { address = 0x0016E2D4, value = 0x8F818F28 }, # lw $at, -0x70D8($gp)   was lui $v0, 0x3F80 (1.0)
+    { address = 0x0016E2D8, value = 0xC42C3D08 }, # lwc1 $f12, 0x3D08($at) was mtc1 $v0, $f12
+]
+
 # Loads/stores whose target is a known EE hardware register, mapped
 # instruction address -> device address. Without this the translator emits a
 # direct memory access for anything it can resolve statically; with it, the

@@ -104,6 +104,24 @@ void Overlay::applySettings() {
         SDL_SetWindowFullscreen(m_window, true);
     applyVolume();
     applyPause();
+    applyFrameRate();
+}
+
+// "Display" follows the refresh rate of the display the window is on.
+void Overlay::applyFrameRate() {
+    if (!m_host.setFrameRate)
+        return;
+    double hz = m_settings.frameRate;
+    if (m_settings.frameRate == Settings::kFrameRateDisplay) {
+        hz = 60.0;
+        if (m_window)
+            if (const SDL_DisplayMode *mode = SDL_GetCurrentDisplayMode(SDL_GetDisplayForWindow(m_window)))
+                if (mode->refresh_rate > 0.0f)
+                    hz = mode->refresh_rate;
+    } else if (m_settings.frameRate == Settings::kFrameRateUncapped) {
+        hz = -1.0;
+    }
+    m_host.setFrameRate(hz);
 }
 
 bool Overlay::capturesInput() const { return m_menuOpen || m_capture.active; }

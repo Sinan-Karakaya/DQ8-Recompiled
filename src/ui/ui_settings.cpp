@@ -133,6 +133,16 @@ void apply(Settings &s, const std::string &section, const std::string &key, cons
         else if (key == "hide_idle_cursor") parseBool(value, s.hideIdleCursor);
     } else if (section == "game") {
         if (key == "fast_forward_speed") parseNumber(value, s.fastForwardSpeed, 0.0f, 16.0f);
+        else if (key == "frame_rate") {
+            if (value == "original") s.frameRate = 0.0f;
+            else if (value == "display") s.frameRate = Settings::kFrameRateDisplay;
+            else if (value == "uncapped") s.frameRate = Settings::kFrameRateUncapped;
+            else {
+                float hz = s.frameRate;
+                parseNumber(value, hz, 0.0f, 1000.0f);
+                s.frameRate = hz < 31.0f ? 0.0f : hz;
+            }
+        }
     }
 }
 } // namespace
@@ -173,7 +183,12 @@ std::string serializeSettings(const Settings &s) {
         << "\npause_in_menu = " << flag(s.pauseInMenu)
         << "\npause_in_background = " << flag(s.pauseInBackground)
         << "\nhide_idle_cursor = " << flag(s.hideIdleCursor) << '\n'
-        << "\n[game]\nfast_forward_speed = " << s.fastForwardSpeed << '\n';
+        << "\n[game]\nfast_forward_speed = " << s.fastForwardSpeed << "\nframe_rate = ";
+    if (s.frameRate == Settings::kFrameRateDisplay) out << "display";
+    else if (s.frameRate == Settings::kFrameRateUncapped) out << "uncapped";
+    else if (s.frameRate <= 0.0f) out << "original";
+    else out << s.frameRate;
+    out << '\n';
     return out.str();
 }
 
