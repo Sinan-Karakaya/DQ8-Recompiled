@@ -185,6 +185,48 @@ std::vector<std::string> payloadCMakeArgs(const Payload &payload, const std::fil
     return args;
 }
 
+PathOverflow pathOverflow(const std::filesystem::path &dir, const std::filesystem::path &at, size_t limit) {
+    PathOverflow worst;
+    std::error_code ec;
+    for (auto it = std::filesystem::recursive_directory_iterator(dir, ec);
+         !ec && it != std::filesystem::recursive_directory_iterator(); it.increment(ec)) {
+        std::error_code entryError;
+        const bool folder = it->is_directory(entryError) && !it->is_symlink(entryError);
+        const std::filesystem::path path = at / it->path().lexically_relative(dir);
+        // The limit counts the path's end, and a folder leaves room for a
+        // file's 8.3 name.
+        const size_t room = limit - (folder ? 13u : 1u);
+        const size_t length = path.native().size();
+        if (length > room && length - room > worst.over)
+            worst = {path, length - room};
+    }
+    return worst;
+}
+
+bool payloadFits(const Payload &payload, const std::filesystem::path &repo, size_t limit, std::string &error) {
+    const std::filesystem::path build = repo / "build";
+    PathOverflow own, copy;
+    for (const auto &[from, to] : {std::pair{payload.source, repo}, std::pair{payload.fetch, build / "fetch"},
+                                   std::pair{payload.deps, build / "deps"}}) {
+        for (const auto &[worst, at] : {std::pair{&own, from}, std::pair{&copy, to}}) {
+            const PathOverflow found = pathOverflow(from, at, limit);
+            if (found.over > worst->over)
+                *worst = found;
+        }
+    }
+    // The copy from a file out of reach fails wherever it goes, so say that first.
+    const std::string limitText = "Windows limits a path to " + std::to_string(limit) + " characters, and ";
+    if (own.over > 0u)
+        error = limitText + "this launcher's own files need " + std::to_string(own.over) + " more where it is, in " +
+                pathUtf8(payload.root.parent_path()) + ". Move that folder somewhere shorter, such as C:\\DQ8Recomp, "
+                "and open the launcher from there.";
+    else if (copy.over > 0u)
+        error = limitText + "the game's files would need " + std::to_string(copy.over) + " more in " +
+                pathUtf8(repo.parent_path()) + ". Choose a shorter folder for the game files in Options, such as "
+                "C:\\DQ8Recomp.";
+    return own.over == 0u && copy.over == 0u;
+}
+
 Unpacked unpackPayload(const Payload &payload, const std::filesystem::path &repo,
                        const std::function<bool(uint64_t, uint64_t)> &progress, std::string &error) {
     std::error_code ec;
@@ -199,6 +241,11 @@ Unpacked unpackPayload(const Payload &payload, const std::filesystem::path &repo
                                  "game files in Options.";
         return Unpacked::Failed;
     }
+    // Before anything is removed or copied: the copy otherwise stopped halfway,
+    // on whichever file came first, with "The system cannot find the path
+    // specified".
+    if (kPathLimit != 0u && !payloadFits(payload, std::filesystem::absolute(repo, ec), kPathLimit, error))
+        return Unpacked::Failed;
     // A new version replaces the source tree; build/ stays, so the next build
     // only redoes what changed.
     for (const auto &entry : std::filesystem::directory_iterator(repo, ec)) {

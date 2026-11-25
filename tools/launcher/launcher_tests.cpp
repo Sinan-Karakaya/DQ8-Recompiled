@@ -315,6 +315,95 @@ void payloadUnpacking() {
     std::filesystem::remove_all(root, ec);
 }
 
+// Windows opens no path of 260 characters or more. A release that sits in, or
+// unpacks into, a folder too long for its files says which folder to shorten,
+// where the copy used to stop halfway with "cannot find the path specified".
+void pathLimits() {
+    const std::filesystem::path root = std::filesystem::temp_directory_path() / "dq8-launcher-limit";
+    std::error_code ec;
+    std::filesystem::remove_all(root, ec);
+
+    // A file may end right at the limit; a folder needs room left for a file.
+    const std::filesystem::path files = root / "files", folders = root / "folders", at = root / "at";
+    std::filesystem::create_directories(files / "tests", ec);
+    std::filesystem::create_directories(folders / "deep", ec);
+    std::ofstream(files / "tests" / "a_long_name.txt") << "x";
+    std::ofstream(folders / "deep" / "a") << "x";
+    const size_t file = (at / "tests" / "a_long_name.txt").native().size();
+    require(pathOverflow(files, at, file + 1u).over == 0u, "a file whose path ends at the limit fits");
+    const PathOverflow overFile = pathOverflow(files, at, file);
+    require(overFile.over == 1u && overFile.path == at / "tests" / "a_long_name.txt",
+            "one character more does not, and it is the path named");
+    const size_t folder = (at / "deep").native().size();
+    require(pathOverflow(folders, at, folder + 13u).over == 0u, "a folder fits with 12 characters left for a file");
+    const PathOverflow overFolder = pathOverflow(folders, at, folder + 12u);
+    require(overFolder.over == 1u && overFolder.path == at / "deep", "and not with 11");
+
+    const auto makePayload = [&](const std::filesystem::path &dir) {
+        for (const char *part : {"source", "fetch/toml11-src/tests_of_everything", "deps/lib", "tools/python/bin",
+                                 "tools/cmake/bin"})
+            std::filesystem::create_directories(dir / part, ec);
+        std::ofstream(dir / "source" / "setup.py") << "# setup";
+        std::ofstream(dir / "fetch" / "toml11-src" / "tests_of_everything" / "same_tests_multiple_configurations.txt")
+            << "x";
+        std::ofstream(dir / "tools" / "python" / "bin" / "python3") << "python";
+        std::ofstream(dir / "payload.json")
+            << R"({"version": "v1", "platform": "test", "paths": {"source": "source", "fetch": "fetch",
+               "deps": "deps", "python": "tools/python/bin/python3", "cmake": "tools/cmake/bin",
+               "ninja": "tools/ninja/bin", "pkgconf": "tools/pkgconf/bin/pkgconf", "recompiler": ""},
+               "versions": {}, "fetched": ["toml11-src"]})";
+        std::string loadError;
+        const std::optional<Payload> payload = loadPayload(dir, loadError);
+        require(payload.has_value(), "the payload loads: " + loadError);
+        return *payload;
+    };
+    const std::filesystem::path longest =
+        std::filesystem::path("build") / "fetch" / "toml11-src" / "tests_of_everything" /
+        "same_tests_multiple_configurations.txt";
+
+    // The game's folder is the one too long: its copies are the longer paths.
+    const Payload payload = makePayload(root / "release" / "payload");
+    const std::filesystem::path games = root / "a folder for the games", repo = unpackedSource(games);
+    const size_t copy = (repo / longest).native().size();
+    std::string error;
+    require(payloadFits(payload, repo, copy + 1u, error) && error.empty(), "a release whose longest copy just fits");
+    require(!payloadFits(payload, repo, copy, error), "one whose longest copy is a character too long does not");
+    require(error.find("need 1 more") != std::string::npos && error.find(pathUtf8(games)) != std::string::npos &&
+                error.find("Options") != std::string::npos,
+            "and the game files folder is the one to change: " + error);
+
+    // The launcher's own folder is: no folder for the game would help.
+    const std::filesystem::path far = root / "a release unzipped a long way down" / "DQ8Recomp";
+    const Payload deepPayload = makePayload(far / "payload");
+    const size_t own = (far / "payload" / "fetch" / "toml11-src" / "tests_of_everything" /
+                        "same_tests_multiple_configurations.txt")
+                           .native()
+                           .size();
+    const std::filesystem::path nearRepo = unpackedSource(root / "g");
+    require((nearRepo / longest).native().size() < own, "this test's copies are the shorter paths");
+    error.clear();
+    require(!payloadFits(deepPayload, nearRepo, own, error) && error.find(pathUtf8(far)) != std::string::npos &&
+                error.find("Move") != std::string::npos && error.find("Options") == std::string::npos,
+            "the launcher's folder is the one to move: " + error);
+
+    // The unpack itself: refused whole on Windows, before a file is copied.
+    std::filesystem::path deep = root;
+    while (deep.native().size() < 200u)
+        deep /= std::string(std::min<size_t>(40u, 200u - deep.native().size()), 'd');
+    std::filesystem::create_directories(deep, ec);
+    error.clear();
+    const Unpacked unpacked = unpackPayload(payload, unpackedSource(deep), {}, error);
+    if (kPathLimit != 0u) {
+        require(unpacked == Unpacked::Failed && error.find("Options") != std::string::npos,
+                "a folder too long for Windows is refused: " + error);
+        require(!std::filesystem::exists(unpackedSource(deep), ec), "with nothing copied into it");
+    } else {
+        require(unpacked == Unpacked::Copied && std::filesystem::exists(unpackedSource(deep) / longest, ec),
+                "where paths have no such limit, the same folder unpacks: " + error);
+    }
+    std::filesystem::remove_all(root, ec);
+}
+
 // A file dated after now, among CMake's inputs, had ninja regenerate
 // build.ninja until it gave up; such files get now's time, other files and
 // .git keep theirs.
@@ -577,6 +666,7 @@ int main() try {
     progressAndVersions();
     compileCosts();
     payloadUnpacking();
+    pathLimits();
     futureFiles();
     builtMarker();
     configuredCompiler();
