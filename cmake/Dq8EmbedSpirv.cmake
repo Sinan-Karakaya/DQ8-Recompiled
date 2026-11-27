@@ -1,5 +1,6 @@
 # Wraps a SPIR-V module as a constexpr uint32_t array in a generated header.
-# Run in script mode by dq8_add_shader; expects INPUT, OUTPUT and SYMBOL.
+# Run in script mode by dq8_add_shader; expects INPUT, OUTPUT and SYMBOL, and
+# takes SHADER_SOURCE to stamp the header with the GLSL it came from.
 
 if(NOT DEFINED INPUT OR NOT DEFINED OUTPUT OR NOT DEFINED SYMBOL)
     message(FATAL_ERROR "Dq8EmbedSpirv.cmake requires INPUT, OUTPUT and SYMBOL")
@@ -42,6 +43,11 @@ endforeach()
 
 get_filename_component(INPUT_NAME "${INPUT}" NAME)
 set(CONTENT "// Generated from ${INPUT_NAME}. Do not edit.\n")
+if(DEFINED SHADER_SOURCE)
+    include("${CMAKE_CURRENT_LIST_DIR}/Dq8ShaderStamp.cmake")
+    dq8_shader_stamp(STAMP "${SHADER_SOURCE}")
+    string(APPEND CONTENT "${STAMP}\n")
+endif()
 string(APPEND CONTENT "#pragma once\n\n#include <cstdint>\n\n")
 string(APPEND CONTENT "inline constexpr uint32_t ${SYMBOL}[] = {\n    ${WORDS}\n};\n")
 file(WRITE "${OUTPUT}" "${CONTENT}")
