@@ -27,7 +27,7 @@ struct Payload {
     // longer has it, and the launcher builds it then.
     std::filesystem::path recompiler;
     std::vector<std::pair<std::string, std::string>> versions; // {"CMake", "4.4.4"}
-    std::vector<std::string> fetched;                          // "glslang-src"
+    std::vector<std::string> fetched;                          // "raylib-src"
 };
 
 // The payload beside the executable (in the app bundle's Resources on macOS).
@@ -42,6 +42,9 @@ ChildEnvironment payloadEnvironment(const Payload &payload, const std::filesyste
 // For both CMake configures: the libraries, Python, pkg-config, and every
 // fetched source in place of its git clone.
 std::vector<std::string> payloadCMakeArgs(const Payload &payload, const std::filesystem::path &repo);
+// For the game's configure alone: no compiler cache, and the shaders the
+// release compiled (its deps/shaders) in place of compiling them.
+std::vector<std::string> payloadGameArgs(const Payload &payload, const std::filesystem::path &repo);
 
 // Windows opens no path of 260 characters or more, and makes no folder of 248
 // or more; 0 where paths have no such limit.

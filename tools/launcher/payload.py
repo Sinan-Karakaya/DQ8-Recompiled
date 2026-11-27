@@ -7,13 +7,14 @@ C++ compiler, so a player downloads one archive and installs nothing else.
       fetch/         the sources CMake's FetchContent would clone with git
       tools/         Python, CMake, Ninja and pkgconf, relocatable, and the
                      recompiler, built from source/
-      deps/          SDL3 (static) and FFmpeg (shared, MPEG-2 only)
+      deps/          SDL3 (static), FFmpeg (shared, MPEG-2 only), and the
+                     renderer's shaders, compiled (shaders/)
       licenses/      the licenses of what tools/ and deps/ were built from
       payload.json   versions and where each tool lives
 
 Run it from a checkout with its submodules, on the platform it is for, with a
-compiler but no system glslang or spirv-cross (they would hide the sources the
-build fetches without them):
+compiler but no system glslang or spirv-cross (a release's shaders are compiled
+with the pinned ones the build fetches without them):
 
     python3 tools/launcher/payload.py --out build/payload
 
@@ -136,7 +137,6 @@ PRUNE = [
     # libdwarf's doc/ stays: its CMakeLists.txt adds it whatever the options.
     "fetch/elfio-src/tests", "fetch/elfio-src/doc", "fetch/elfio-src/examples",
     "fetch/fmt-src/test", "fetch/fmt-src/doc",
-    "fetch/glslang-src/Test", "fetch/glslang-src/gtests",
     "fetch/libdwarf-src/test", "fetch/libdwarf-src/bugxml", "fetch/libdwarf-src/fuzz",
     "fetch/nlohmann_json-src/tests", "fetch/nlohmann_json-src/docs",
     "fetch/rabbitizer-src/tests", "fetch/rabbitizer-src/docs",
@@ -146,6 +146,12 @@ PRUNE = [
 # folder keeps 98 characters on Windows. A new dependency that goes past it
 # stops the payload rather than a player's build.
 UNPACKED_PATH_BUDGET = 160
+# The shader compilers the game's configure fetches. A release compiles the
+# shaders with them and ships the result: a player's build then makes and runs
+# neither, where one build sat at its last four shaders with no error.
+SHADER_COMPILERS = ("glslang-src", "spirv_cross-src")
+# The renderer, which owns the shaders: building it compiles them.
+RENDERER_TARGET = "dq8_gfx_sdlgpu"
 
 
 def prune(out: Path, target: str) -> None:
@@ -293,7 +299,9 @@ def notices(version: str, target: str) -> str:
             "\nsource/ is DQ8Recomp with its submodules, and fetch/ the sources CMake would\n"
             "download for the build; both keep their own license files. tools/ps2recomp\n"
             "is PS2Recomp (GPL 3), built from source/thirdparty/PS2Recomp with the ELFIO,\n"
-            "fmt, toml11, libdwarf (LGPL 2.1) and Rabbitizer sources in fetch/.\n")
+            "fmt, toml11, libdwarf (LGPL 2.1) and Rabbitizer sources in fetch/.\n"
+            "deps/shaders is DQ8Recomp's own shaders, compiled from\n"
+            "source/src/gfx/backends/sdlgpu/shaders.\n")
 
 
 def tools_env(tools: dict, deps: Path, target: str) -> dict:
@@ -381,7 +389,7 @@ def build_recompiler(recomp: Path, tools_dir: Path, tools: dict, env: dict, targ
 
 
 def configure(source: Path, recomp: Path, game: Path, work: Path, tools: dict, deps: Path, env: dict,
-              target: str, extra: list) -> None:
+              target: str, extra: list, game_extra: list | None = None) -> None:
     """Configures the recompiler and the game once, as the launcher will."""
     run([tools["cmake"], "-S", source / "thirdparty" / "PS2Recomp", "-B", recomp, "-G", "Ninja"]
         + recompiler_args(source, target) + extra, env=env)
@@ -390,26 +398,54 @@ def configure(source: Path, recomp: Path, game: Path, work: Path, tools: dict, d
     stub = work / "stub-generated"
     stub.mkdir(parents=True, exist_ok=True)
     (stub / "stub.cpp").write_text("// stand-in for the translated game\n")
+    # What the launcher sets up for players, since the renderer is built here:
+    # Visual Studio's compiler on Windows, the system's on Linux, where the game
+    # would take the runner's clang 14, too old for the runtime's headers.
+    compiler = {"windows": ["-DCMAKE_C_COMPILER=cl", "-DCMAKE_CXX_COMPILER=cl"],
+                "linux": ["-DCMAKE_C_COMPILER=cc", "-DCMAKE_CXX_COMPILER=c++"]}.get(target.partition("-")[0], [])
     run([tools["cmake"], "-S", source, "-B", game, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
          "-DDQ8_LINK_GENERATED=ON", "-DDQ8_LINK_OVERLAYS=OFF", "-DDQ8_GFX_ENABLE_SDLGPU=ON",
          f"-DDQ8_GENERATED_DIR={stub}", f"-DCMAKE_PREFIX_PATH={deps}",
          f"-DPKG_CONFIG_EXECUTABLE={tools['pkgconf']}", "-DPKG_CONFIG_ARGN=--define-prefix",
-         f"-DPython3_EXECUTABLE={tools['python']}"] + extra, env=env)
+         f"-DPython3_EXECUTABLE={tools['python']}"] + compiler + extra + (game_extra or []), env=env)
 
 
-def check_pruned(out: Path, work: Path, fetched: list, tools: dict, env: dict, target: str) -> None:
+def compile_shaders(game: Path, shaders: Path, tools: dict, env: dict, jobs: int) -> None:
+    """The renderer's shaders, compiled by the configure harvest_fetch made,
+    as headers the game's build takes with DQ8_PREBUILT_SHADERS."""
+    run([tools["cmake"], "--build", game, "--target", RENDERER_TARGET, "--parallel", str(jobs)], env=env)
+    built = sorted((game / "src" / "gfx" / "generated" / "shaders").glob("*.h"))
+    if not built:
+        sys.exit(f"payload: building {RENDERER_TARGET} left no shader header in {game}.")
+    shaders.mkdir(parents=True)
+    for header in built:
+        shutil.copy2(header, shaders / header.name)
+    print(f"payload: compiled {len(built)} shader headers", flush=True)
+
+
+def check_pruned(out: Path, work: Path, fetched: list, tools: dict, env: dict, target: str, jobs: int) -> None:
     """Configures both again from what the release ships, as a player's build
-    does, and measures the paths it will unpack: the pruning runs after the
-    first configure, which never saw its result."""
-    # As the launcher names them: "spirv_cross-src" stands in for SPIRV_CROSS.
+    does, builds the renderer from its compiled shaders, and measures the paths
+    it will unpack: the pruning runs after the first configure, which never saw
+    its result."""
+    # As the launcher names them: "nlohmann_json-src" stands in for NLOHMANN_JSON.
     sources = [f"-DFETCHCONTENT_SOURCE_DIR_{name[:-4].upper()}={(out / 'fetch' / name).as_posix()}"
                for name in fetched]
+    game = work / "game-pruned"
     try:
-        configure(out / "source", work / "recomp-pruned", work / "game-pruned", work, tools, out / "deps", env,
-                  target, sources)
+        configure(out / "source", work / "recomp-pruned", game, work, tools, out / "deps", env, target, sources,
+                  [f"-DDQ8_PREBUILT_SHADERS={(out / 'deps' / 'shaders').as_posix()}"])
     except subprocess.CalledProcessError:
-        sys.exit("payload: the build does not configure from the pruned sources in fetch/; "
-                 "PRUNE takes something it reads.")
+        sys.exit("payload: the build does not configure from what the release ships: PRUNE takes something "
+                 "it reads, or deps/shaders lacks a shader or holds one compiled from another source.")
+    try:
+        run([tools["cmake"], "--build", game, "--target", RENDERER_TARGET, "--parallel", str(jobs)], env=env)
+    except subprocess.CalledProcessError:
+        sys.exit("payload: the renderer does not build from the shaders in deps/shaders.")
+    # harvest_fetch saw the same folders appear where the shaders were compiled.
+    cloned = [name for name in SHADER_COMPILERS if (game / "_deps" / name).exists()]
+    if cloned:
+        sys.exit(f"payload: a player's configure would still fetch {', '.join(cloned)} to compile shaders.")
     # Where the launcher puts each tree under the player's folder. Windows
     # gives a folder 12 characters fewer than a file.
     unpacked = {"source": "DQ8Recomp-source", "fetch": "DQ8Recomp-source/build/fetch",
@@ -426,26 +462,31 @@ def check_pruned(out: Path, work: Path, fetched: list, tools: dict, env: dict, t
 def harvest_fetch(source: Path, work: Path, fetch_dir: Path, tools: dict, deps: Path, env: dict,
                   target: str) -> list:
     """Configures the recompiler and the game, and keeps the sources
-    FetchContent cloned."""
+    FetchContent cloned, but for the shader compilers: compile_shaders uses
+    them here instead."""
     recomp, game = work / "recomp", work / "game"
     configure(source, recomp, game, work, tools, deps, env, target, [])
     # This is the configure a player's build gets. Without FFmpeg the game still
     # builds and runs, and shows garbage for every movie, as Windows releases did.
     if not decodes_movies(game / "CMakeCache.txt"):
         sys.exit("payload: the game's configure left FFmpeg off, so no movie would play in this release.")
-    names = []
+    names, cloned = [], []
     for build in (recomp, game):
         for src in sorted((build / "_deps").glob("*-src")):
-            if src.name in names:
+            if src.name in cloned:
+                continue
+            cloned.append(src.name)
+            if src.name in SHADER_COMPILERS:
                 continue
             shutil.copytree(src, fetch_dir / src.name, symlinks=True,
                             ignore=shutil.ignore_patterns(".git"))
             names.append(src.name)
     needed = ["glslang-src", "raylib-src"] + (["spirv_cross-src"] if target.startswith("macos") else [])
-    missing = [name for name in needed if name not in names]
+    missing = [name for name in needed if name not in cloned]
     if missing:
         sys.exit(f"payload: {', '.join(missing)} were not fetched; a system glslang or spirv-cross "
-                 "hid them. Build the payload where neither is installed.")
+                 "would compile the release's shaders in place of the pinned ones. Build the payload "
+                 "where neither is installed.")
     return names
 
 
@@ -525,11 +566,12 @@ def main() -> None:
 
     fetched = harvest_fetch(out / "source", work, out / "fetch", tools, deps, env, target)
     recompiler = build_recompiler(work / "recomp", tools_dir, tools, env, target, args.jobs)
+    compile_shaders(work / "game", deps / "shaders", tools, env, args.jobs)
     prune(out, target)
     # What the translation's scripts import, after the pruning: a release once
     # went out without threading.
     run([python, "-I", "-c", "import hashlib, json, subprocess, threading"])
-    check_pruned(out, work, fetched, tools, env, target)
+    check_pruned(out, work, fetched, tools, env, target, args.jobs)
 
     manifest = {
         "version": version,

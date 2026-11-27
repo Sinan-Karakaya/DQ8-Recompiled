@@ -241,11 +241,11 @@ void payloadUnpacking() {
     std::error_code ec;
     std::filesystem::remove_all(root, ec);
     const std::filesystem::path payloadDir = root / "payload";
-    for (const char *dir : {"source/config", "fetch/spirv_cross-src", "deps/lib/pkgconfig", "tools/python/bin",
+    for (const char *dir : {"source/config", "fetch/nlohmann_json-src", "deps/lib/pkgconfig", "tools/python/bin",
                             "tools/cmake/bin", "tools/ninja/bin", "tools/pkgconf/bin"})
         std::filesystem::create_directories(payloadDir / dir, ec);
     std::ofstream(payloadDir / "source" / "setup.py") << "# setup";
-    std::ofstream(payloadDir / "fetch" / "spirv_cross-src" / "CMakeLists.txt") << "project(x)";
+    std::ofstream(payloadDir / "fetch" / "nlohmann_json-src" / "CMakeLists.txt") << "project(x)";
     std::ofstream(payloadDir / "deps" / "lib" / "pkgconfig" / "sdl3.pc") << "Name: SDL3";
     std::ofstream(payloadDir / "tools" / "python" / "bin" / "python3") << "python";
     const auto manifest = [&](const char *version) {
@@ -254,7 +254,7 @@ void payloadUnpacking() {
                "fetch": "fetch", "deps": "deps", "python": "tools/python/bin/python3", "cmake": "tools/cmake/bin",
                "ninja": "tools/ninja/bin", "pkgconf": "tools/pkgconf/bin/pkgconf",
                "recompiler": "tools/ps2recomp/ps2_recomp"},
-               "versions": {"SDL3": "3.4.16", "CMake": "4.4.4"}, "fetched": ["spirv_cross-src"]})";
+               "versions": {"SDL3": "3.4.16", "CMake": "4.4.4"}, "fetched": ["nlohmann_json-src"]})";
     };
     manifest("v1");
     std::string error;
@@ -271,8 +271,8 @@ void payloadUnpacking() {
     const std::filesystem::path repo = root / "games" / "DQ8Recomp-source";
     const std::vector<std::string> args = payloadCMakeArgs(*payload, repo);
     require(std::find(args.begin(), args.end(),
-                      "-DFETCHCONTENT_SOURCE_DIR_SPIRV_CROSS=" +
-                          (repo / "build" / "fetch" / "spirv_cross-src").generic_string()) != args.end(),
+                      "-DFETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON=" +
+                          (repo / "build" / "fetch" / "nlohmann_json-src").generic_string()) != args.end(),
             "each fetched source stands in for its git clone");
 #if defined(_WIN32)
     const char *ninja = "ninja.exe";
@@ -283,18 +283,29 @@ void payloadUnpacking() {
                       "-DCMAKE_MAKE_PROGRAM=" + (payloadDir / "tools" / "ninja" / "bin" / ninja).generic_string()) !=
                 args.end(),
             "the payload's own ninja, not one cached from a release unpacked elsewhere");
+    require(payloadGameArgs(*payload, repo) == std::vector<std::string>{"-DDQ8_COMPILER_CACHE=OFF"},
+            "a payload without compiled shaders leaves the game's build to compile them");
+    std::filesystem::create_directories(payloadDir / "deps" / "shaders", ec);
+    std::ofstream(payloadDir / "deps" / "shaders" / "gs_draw.frag.spv.h") << "// compiled";
+    const std::vector<std::string> gameArgs = payloadGameArgs(*payload, repo);
+    require(std::find(gameArgs.begin(), gameArgs.end(),
+                      "-DDQ8_PREBUILT_SHADERS=" + (repo / "build" / "deps" / "shaders").generic_string()) !=
+                gameArgs.end(),
+            "the game's build takes the shaders the release compiled");
 
     // An unzip west of UTC can date the download hours ahead, one east of it
     // hours behind.
     const auto beforeUnpack = std::filesystem::file_time_type::clock::now();
     std::filesystem::last_write_time(payloadDir / "source" / "setup.py", beforeUnpack - std::chrono::hours(9), ec);
-    std::filesystem::last_write_time(payloadDir / "fetch" / "spirv_cross-src" / "CMakeLists.txt",
+    std::filesystem::last_write_time(payloadDir / "fetch" / "nlohmann_json-src" / "CMakeLists.txt",
                                      beforeUnpack + std::chrono::hours(7), ec);
     require(unpackPayload(*payload, repo, {}, error) == Unpacked::Copied, "the first unpack copies: " + error);
     require(std::filesystem::exists(repo / "setup.py") && std::filesystem::exists(repo / "build" / "deps" / "lib"),
             "the source tree and the libraries land in the workspace");
+    require(std::filesystem::exists(repo / "build" / "deps" / "shaders" / "gs_draw.frag.spv.h"),
+            "the compiled shaders land where the game's build is told to find them");
     const auto afterUnpack = std::filesystem::file_time_type::clock::now();
-    for (const std::filesystem::path &copy : {repo / "setup.py", repo / "build" / "fetch" / "spirv_cross-src" /
+    for (const std::filesystem::path &copy : {repo / "setup.py", repo / "build" / "fetch" / "nlohmann_json-src" /
                                                                   "CMakeLists.txt"}) {
         const auto time = std::filesystem::last_write_time(copy, ec);
         require(time >= beforeUnpack - std::chrono::seconds(2) && time <= afterUnpack + std::chrono::seconds(2),

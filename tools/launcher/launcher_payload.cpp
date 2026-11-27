@@ -176,12 +176,24 @@ std::vector<std::string> payloadCMakeArgs(const Payload &payload, const std::fil
     for (const std::string &name : payload.fetched) {
         if (name.size() <= 4u || !name.ends_with("-src"))
             continue;
-        // "spirv_cross-src" holds FetchContent's spirv_cross.
+        // "nlohmann_json-src" holds FetchContent's nlohmann_json.
         std::string upper = name.substr(0, name.size() - 4u);
         std::transform(upper.begin(), upper.end(), upper.begin(),
                        [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
         args.push_back("-DFETCHCONTENT_SOURCE_DIR_" + upper + "=" + cmakePath(build / "fetch" / name));
     }
+    return args;
+}
+
+std::vector<std::string> payloadGameArgs(const Payload &payload, const std::filesystem::path &repo) {
+    // A release builds with its own tools: a ccache another project had left
+    // on PATH went between cl and its precompiled header.
+    std::vector<std::string> args = {"-DDQ8_COMPILER_CACHE=OFF"};
+    // Otherwise the build makes a shader compiler and runs it: one build sat
+    // at its last four shaders, with no error.
+    std::error_code ec;
+    if (std::filesystem::is_directory(payload.deps / "shaders", ec))
+        args.push_back("-DDQ8_PREBUILT_SHADERS=" + cmakePath(repo / "build" / "deps" / "shaders"));
     return args;
 }
 

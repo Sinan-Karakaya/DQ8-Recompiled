@@ -2,8 +2,52 @@
 # Require a compiler so shader edits cannot silently use stale bytecode.
 # Compiler search order: system glslc, system glslangValidator/glslang, then a
 # FetchContent build of glslang. Set DQ8_SHADER_COMPILER to force one.
+# DQ8_PREBUILT_SHADERS takes the headers a release compiled instead, checked
+# against the sources, so a player's build makes and runs no compiler for them.
 
 include_guard(GLOBAL)
+
+include("${CMAKE_CURRENT_LIST_DIR}/Dq8ShaderStamp.cmake")
+
+set(DQ8_PREBUILT_SHADERS "" CACHE PATH
+    "Folder of shader headers compiled ahead, used instead of compiling them (a release's deps/shaders)")
+
+# Takes one shader's headers from DQ8_PREBUILT_SHADERS (tools/launcher/payload.py
+# fills it). Each header is stamped with its source: an edited shader stops the
+# configure here rather than drawing with the old bytecode.
+function(dq8_use_prebuilt_shader TARGET SOURCE STEM)
+    file(TO_CMAKE_PATH "${DQ8_PREBUILT_SHADERS}" DIR)
+    get_property(ANNOUNCED GLOBAL PROPERTY DQ8_PREBUILT_SHADERS_ANNOUNCED)
+    if(NOT ANNOUNCED)
+        set_property(GLOBAL PROPERTY DQ8_PREBUILT_SHADERS_ANNOUNCED ON)
+        message(STATUS "dq8 shaders: compiled ahead, from ${DIR}")
+    endif()
+
+    dq8_shader_stamp(EXPECTED "${SOURCE}")
+    set(HEADERS "${DIR}/${STEM}.spv.h")
+    if(APPLE)
+        list(APPEND HEADERS "${DIR}/${STEM}.msl.h")
+    endif()
+    foreach(HEADER IN LISTS HEADERS)
+        if(NOT EXISTS "${HEADER}")
+            message(FATAL_ERROR
+                "dq8 shaders: ${HEADER} is missing. DQ8_PREBUILT_SHADERS has to hold "
+                "every shader, compiled; unset it to compile them here.")
+        endif()
+        file(STRINGS "${HEADER}" STAMP LIMIT_COUNT 1 REGEX "^// source-sha256: ")
+        if(NOT "${STAMP}" STREQUAL "${EXPECTED}")
+            message(FATAL_ERROR
+                "dq8 shaders: ${HEADER} was not compiled from ${SOURCE} as it is now. "
+                "Unset DQ8_PREBUILT_SHADERS to compile the shaders here.")
+        endif()
+    endforeach()
+
+    target_sources(${TARGET} PRIVATE ${HEADERS})
+    target_include_directories(${TARGET} PRIVATE "${DIR}")
+    if(APPLE)
+        target_compile_definitions(${TARGET} PRIVATE DQ8_GFX_HAS_MSL=1)
+    endif()
+endfunction()
 
 # Resolves the compiler once per configure, into global properties rather than
 # cache variables. A fetched glslang is referenced by generator expression, and
@@ -77,14 +121,6 @@ function(dq8_add_shader TARGET)
         message(FATAL_ERROR "dq8_add_shader: SOURCE, STAGE and SYMBOL are required")
     endif()
 
-    dq8_find_shader_compiler()
-    get_property(SHADER_COMPILER GLOBAL PROPERTY DQ8_SHADER_COMPILER_PATH)
-    get_property(SHADER_DIALECT GLOBAL PROPERTY DQ8_SHADER_COMPILER_DIALECT)
-    get_property(SHADER_COMPILER_TARGET GLOBAL PROPERTY DQ8_SHADER_COMPILER_TARGET)
-    if(NOT SHADER_COMPILER)
-        message(FATAL_ERROR "dq8_add_shader: no GLSL compiler available")
-    endif()
-
     get_filename_component(STEM "${ARG_SOURCE}" NAME)
     set(SHADER_DEFINES)
     set(MSL_OPTIONS)
@@ -98,6 +134,20 @@ function(dq8_add_shader TARGET)
         list(APPEND MSL_OPTIONS --msl-framebuffer-fetch)
         set(MSL_VERSION 20300)
     endif()
+
+    if(DQ8_PREBUILT_SHADERS)
+        dq8_use_prebuilt_shader(${TARGET} "${ARG_SOURCE}" "${STEM}")
+        return()
+    endif()
+
+    dq8_find_shader_compiler()
+    get_property(SHADER_COMPILER GLOBAL PROPERTY DQ8_SHADER_COMPILER_PATH)
+    get_property(SHADER_DIALECT GLOBAL PROPERTY DQ8_SHADER_COMPILER_DIALECT)
+    get_property(SHADER_COMPILER_TARGET GLOBAL PROPERTY DQ8_SHADER_COMPILER_TARGET)
+    if(NOT SHADER_COMPILER)
+        message(FATAL_ERROR "dq8_add_shader: no GLSL compiler available")
+    endif()
+
     set(GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated/shaders")
     set(SPIRV "${GENERATED_DIR}/${STEM}.spv")
     set(HEADER "${GENERATED_DIR}/${STEM}.spv.h")
@@ -129,12 +179,14 @@ function(dq8_add_shader TARGET)
         COMMENT "Compiling shader ${STEM}"
         VERBATIM COMMAND_EXPAND_LISTS)
 
+    set(STAMP_SCRIPT "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/Dq8ShaderStamp.cmake")
     add_custom_command(
         OUTPUT "${HEADER}"
         COMMAND "${CMAKE_COMMAND}"
                 "-DINPUT=${SPIRV}" "-DOUTPUT=${HEADER}" "-DSYMBOL=${ARG_SYMBOL}"
+                "-DSHADER_SOURCE=${ARG_SOURCE}"
                 -P "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/Dq8EmbedSpirv.cmake"
-        DEPENDS "${SPIRV}" "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/Dq8EmbedSpirv.cmake"
+        DEPENDS "${SPIRV}" "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/Dq8EmbedSpirv.cmake" "${STAMP_SCRIPT}"
         COMMENT "Embedding shader ${STEM}"
         VERBATIM)
 
@@ -170,8 +222,9 @@ function(dq8_add_shader TARGET)
         add_custom_command(OUTPUT "${MSL_HEADER}"
             COMMAND "${CMAKE_COMMAND}"
                     "-DINPUT=${MSL}" "-DOUTPUT=${MSL_HEADER}" "-DSYMBOL=${ARG_SYMBOL}Msl"
+                    "-DSHADER_SOURCE=${ARG_SOURCE}"
                     -P "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/Dq8EmbedText.cmake"
-            DEPENDS "${MSL}" "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/Dq8EmbedText.cmake"
+            DEPENDS "${MSL}" "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/Dq8EmbedText.cmake" "${STAMP_SCRIPT}"
             VERBATIM)
         target_sources(${TARGET} PRIVATE "${MSL_HEADER}")
         target_compile_definitions(${TARGET} PRIVATE DQ8_GFX_HAS_MSL=1)

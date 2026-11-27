@@ -102,10 +102,11 @@ Then open `build/launcher/DQ8Recomp Launcher.app` on macOS, or run
 Each push to `main` is published to
 [Releases](https://github.com/Sinan-Karakaya/DQ8-Recompiled/releases), named by
 its commit's short hash. A release download carries everything the build needs
-(the source, CMake, Ninja, Python, SDL3, FFmpeg and the libraries the build
-would fetch) except a C++ compiler, which no release may include; the launcher
-installs that through the system: Apple's Command Line Tools on macOS, Visual
-Studio Build Tools on Windows, the distribution's packages on Linux.
+(the source, CMake, Ninja, Python, SDL3, FFmpeg, the renderer's shaders already
+compiled, and the libraries the build would fetch) except a C++ compiler, which
+no release may include; the launcher installs that through the system: Apple's
+Command Line Tools on macOS, Visual Studio Build Tools on Windows, the
+distribution's packages on Linux.
 `python3 tools/launcher/payload.py --out build/payload` assembles a release's
 payload, as the Release workflow does for each platform: macOS on Apple silicon
 and Intel, Windows on x86-64, Linux on x86-64 and ARM64.
