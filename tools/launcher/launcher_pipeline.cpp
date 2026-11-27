@@ -788,10 +788,10 @@ void Pipeline::run(PipelineOptions options, ChildEnvironment environment) {
                 withConfigureArgs(build, {"cmake", "-S", pathUtf8(repo), "-B", pathUtf8(build), "-G", "Ninja",
                                           "-DCMAKE_BUILD_TYPE=Release", "-DDQ8_LINK_GENERATED=ON",
                                           "-DDQ8_LINK_OVERLAYS=ON", "-DDQ8_GFX_ENABLE_SDLGPU=ON"});
-            // A release builds with its own tools: a ccache another project
-            // had left on PATH went between cl and its precompiled header.
-            if (payload)
-                args.push_back("-DDQ8_COMPILER_CACHE=OFF");
+            if (payload) {
+                const std::vector<std::string> release = payloadGameArgs(*payload, repo);
+                args.insert(args.end(), release.begin(), release.end());
+            }
 #if defined(__APPLE__)
             // The app bundle the build makes starts the game from these.
             args.push_back("-DDQ8_MACOS_ELF=" + pathUtf8(extracted / kVersion));
