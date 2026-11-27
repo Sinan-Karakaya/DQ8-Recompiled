@@ -398,8 +398,11 @@ def configure(source: Path, recomp: Path, game: Path, work: Path, tools: dict, d
     stub = work / "stub-generated"
     stub.mkdir(parents=True, exist_ok=True)
     (stub / "stub.cpp").write_text("// stand-in for the translated game\n")
-    # Visual Studio's compiler, as the launcher uses: the renderer is built here.
-    compiler = ["-DCMAKE_C_COMPILER=cl", "-DCMAKE_CXX_COMPILER=cl"] if target.startswith("windows") else []
+    # What the launcher sets up for players, since the renderer is built here:
+    # Visual Studio's compiler on Windows, the system's on Linux, where the game
+    # would take the runner's clang 14, too old for the runtime's headers.
+    compiler = {"windows": ["-DCMAKE_C_COMPILER=cl", "-DCMAKE_CXX_COMPILER=cl"],
+                "linux": ["-DCMAKE_C_COMPILER=cc", "-DCMAKE_CXX_COMPILER=c++"]}.get(target.partition("-")[0], [])
     run([tools["cmake"], "-S", source, "-B", game, "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
          "-DDQ8_LINK_GENERATED=ON", "-DDQ8_LINK_OVERLAYS=OFF", "-DDQ8_GFX_ENABLE_SDLGPU=ON",
          f"-DDQ8_GENERATED_DIR={stub}", f"-DCMAKE_PREFIX_PATH={deps}",
